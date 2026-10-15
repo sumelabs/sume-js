@@ -2,8 +2,17 @@ import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { InvalidRequestError, NotFoundError, RateLimitError, Sume, WaitTimeoutError } from "../src/index.js";
+import {
+  InsufficientFundsError,
+  InvalidRequestError,
+  NotFoundError,
+  OverBudgetError,
+  RateLimitError,
+  Sume,
+  WaitTimeoutError,
+} from "../src/index.js";
 import { BASE, KEY, MockApi, PNG } from "./mock-api.js";
 
 let api: MockApi;
@@ -23,7 +32,9 @@ beforeEach(() => {
 
 afterEach(() => {
   process.chdir(cwd);
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("waiting", () => {
@@ -159,5 +170,67 @@ describe("errors and inputs", () => {
     const [body] = api.bodies("/v1/image-router/generate");
     expect(body?.future_field).toBe(1);
     expect(body?.quality).toBe("low");
+  });
+
+  it("an empty balance says top up, not job failed", async () => {
+    api.balanceUsd = 0;
+    await expect(make().run("gpt-image-2", "a kite")).rejects.toThrow(InsufficientFundsError);
+  });
+
+  it("run names the timeout it was given", async () => {
+    api.outcome = "running";
+    let clock = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const sume = new Sume({
+      apiKey: KEY,
+      baseUrl: BASE,
+      fetch: api.fetch,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+    });
+    await expect(sume.run("gpt-image-2", "a kite", { timeoutMs: 7000 })).rejects.toThrow("after 7 s");
+  });
+
+  it("submit can fail fast when the account is full", async () => {
+    api.slotsBusy = 5;
+    await expect(make().submit("gpt-image-2", "a kite", { slotWaitMs: 0 })).rejects.toThrow(RateLimitError);
+    expect(api.calls("POST", "/v1/image-router/generate").length).toBe(1);
+  });
+
+  it("module functions keep the options after an undefined prompt", async () => {
+    const { run } = await import("../src/index.js");
+    vi.stubEnv("SUME_API_KEY", KEY);
+    vi.stubEnv("SUME_API_BASE_URL", BASE);
+    vi.stubGlobal("fetch", api.fetch);
+    const prompt: string | undefined = undefined;
+    await expect(run("gpt-image-2", prompt, { quality: "low", maxUsd: 0.0001 })).rejects.toThrow(OverBudgetError);
+    vi.unstubAllGlobals();
+  });
+
+  it("data: URLs upload, http is refused, the same file uploads once, metadata is left alone", async () => {
+    writeFileSync(join(dir, "photo.png"), PNG);
+    const dataUrl = `data:image/png;base64,${Buffer.from(PNG).toString("base64")}`;
+    const sume = make();
+    await sume.run("gpt-image-2", "a kite", {
+      image: [dataUrl, "photo.png", pathToFileURL(join(dir, "photo.png")).href],
+      metadata: { source_url: { url: "notes" } },
+    });
+    const [body] = api.bodies("/v1/image-router/generate");
+    expect(body?.image_urls.every((u: string) => u.startsWith("https://media.test/assets/"))).toBe(true);
+    expect(body?.metadata).toEqual({ source_url: { url: "notes" } });
+    expect(api.calls("POST", "/v1/assets/upload-url").length).toBe(1);
+    await expect(sume.run("gpt-image-2", "a kite", { image: "http://example.com/a.png" })).rejects.toThrow(
+      "https media URLs only",
+    );
+  });
+
+  it("a status keeps raw through a spread and prints without it", async () => {
+    const sume = make();
+    const job = await sume.submit("gpt-image-2", "a kite");
+    const status = await sume.status(job.id);
+    expect({ ...status }.raw).toBe(status.raw);
+    expect(String({ ...status })).toBe(String(status));
+    expect(inspect(status)).not.toContain("raw");
   });
 });

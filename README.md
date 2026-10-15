@@ -24,7 +24,7 @@ That is the whole program. `run` prices the request and submits it, uploading an
 npm install https://github.com/sumelabs/sume-js/releases/latest/download/sume-open.tgz
 ```
 
-The package is not on npm yet. Once it is, the install line will be `npm install @sume-com/open`. It ships ESM and CommonJS builds with TypeScript types.
+The package is not on npm yet. Once it is, the install line will be `npm install @sume-com/open`. It ships ESM and CommonJS builds with TypeScript types (TypeScript 5.0 or newer; no `@types/node` needed).
 
 **Server-side only.** A Sume key spends money, and anything in a page can be read by whoever opens it. If a browser bundle imports the package, the bundle gets a stub that throws and tells you to move the call to your backend. Run it in an API route, a server action or a worker, then send the result to the browser.
 
@@ -76,7 +76,7 @@ const captioned = await run("veed-subtitles", {
 - **`timeoutMs`** is how long `run` waits in all: 30 minutes by default. When it passes, the job keeps running; see [Progress, long jobs and cancel](#progress-long-jobs-and-cancel).
 - **`signal`** is an `AbortSignal` that stops the uploads, the submit and the wait.
 - **Retries never pay twice.** Every submit carries an idempotency key, and the client's retries reuse it. To retry a submit yourself, pass `idempotencyKey`.
-- **A busy account waits.** When the account already runs as many jobs as it may, `run` and `submit` wait for a free slot and submit then, instead of failing.
+- **A busy account waits.** When the account already runs as many jobs as it may, `run` and `submit` wait for a free slot and submit then, instead of failing: `run` within its `timeoutMs`, `submit` up to 10 minutes. `slotWaitMs: 0` on `submit` throws `RateLimitError` at once instead.
 
 `run` resolves to a `Result`:
 
@@ -94,7 +94,7 @@ A video's poster frame is left out of `files`; `allFiles` has every file the job
 
 ## Types
 
-Each model this version knows has its own input type, generated from the live API, with the API's descriptions on hover. The model id picks it, so the editor completes the fields that model takes, and the values it lists (`resolution: "480p" | "720p"` for `seedance-2-mini`). A mistake fails the type check before it costs anything:
+Each model this version knows has its own input type, generated from the live API, with the API's descriptions on hover. The model id picks it, so the editor completes the fields that model takes (a field the catalog says it refuses is left out, and lip-sync and captions require `duration`), and the values it lists (`resolution: "480p" | "720p"` for `seedance-2-mini`). A mistake fails the type check before it costs anything:
 
 ```ts
 await run("gpt-image-2", "a red kite", { qualty: "low" });
@@ -104,7 +104,7 @@ await run("gpt-image-2", "a red kite", { qualty: "low" });
 error TS2561: Object literal may only specify known properties, but 'qualty' does not exist in type 'RunInput<"gpt-image-2">'. Did you mean to write 'quality'?
 ```
 
-- `ModelId` lists every model this version knows; `ImageModelId` and `VideoModelId` split them by kind. A model added to the catalog later still works: `run` takes any id, and gives it the general `Input` type.
+- `ModelId` lists every model this version knows; `ImageModelId` and `VideoModelId` split them by kind. A model added to the catalog later still works: `run` takes any id, and gives it the general `Input` type. A typo in a model id is caught when the call runs, with a suggestion (`Did you mean gpt-image-2?`), not by tsc.
 - `InputOf<"seedance-2-mini">` is that model's fields, and so is the named type `Seedance2MiniInput`. `ImageInput` and `VideoInput` cover every model of a kind.
 - Fields with a fixed set of values in the API, like `captions.position` or `background`, are checked. Where the catalog lists a model's own values (`resolution`, `aspect_ratio`, `quality`, `output_format`), those are offered, and any other string is still accepted: the API takes some values that the catalog does not list.
 - A field newer than this version goes through `input`: `run("gpt-image-2", "a kite", { input: { new_field: 1 } })`.
@@ -161,13 +161,13 @@ A job that has not started generating can be canceled, and it is refunded:
 ```ts
 import { cancel, run } from "@sume-com/open";
 
-await cancel(job.id); // true when canceled
+await cancel(job.id); // true when canceled; false when it had already started or ended
 
 // Or give up on a wait, and cancel the job if it is still queued:
 await run("kling-3", "a red kite", { duration: 5, timeoutMs: 120_000, cancelOnTimeout: true });
 ```
 
-`wait`, `poll` and `run` read the status as often as the API asks: at most every 5 s for the first minute, every 10 s after that, and every 15 s after ten minutes. Network errors and errors on Sume's side do not end the wait. When `timeoutMs` passes, `WaitTimeoutError` names the job, and the job keeps running (unless you passed `cancelOnTimeout` and it had not started). Do not submit again: a second submit is a second charge.
+`wait`, `poll` and `run` read the status as often as the API asks, but never wait longer than 5 s between reads in the first minute, 10 s after that, and 15 s after ten minutes. Network errors and errors on Sume's side do not end the wait. When `timeoutMs` passes, `WaitTimeoutError` names the job, and the job keeps running (unless you passed `cancelOnTimeout` and it had not started). Do not submit again: a second submit is a second charge.
 
 ## Files
 
@@ -216,7 +216,14 @@ import { submit } from "@sume-com/open";
 
 export async function POST(request: Request) {
   const { prompt } = await request.json();
-  const job = await submit("seedance-2-mini", prompt, { duration: 5, resolution: "480p", maxUsd: 0.5 });
+  // A busy account waits for a slot; slotWaitMs bounds that, so the request never hangs.
+  const job = await submit("seedance-2-mini", prompt, {
+    duration: 5,
+    resolution: "480p",
+    maxUsd: 0.5,
+    slotWaitMs: 20_000,
+    signal: request.signal,
+  });
   return Response.json({ jobId: job.id });
 }
 
@@ -289,7 +296,7 @@ try {
 | `InvalidRequestError` | A field is missing, wrong, or not taken by this model (`fieldErrors` says which). `NotFoundError` covers an unknown model or job; for a model it suggests the closest id |
 | `RateLimitError` | Too many requests, or a slot did not free up within the wait |
 | `JobFailedError` | The job failed or was canceled. It is refunded; `jobId` and the reason are on the error |
-| `WaitTimeoutError` | `timeoutMs` passed. The job is still running; `result(error.jobId)` picks it up |
+| `WaitTimeoutError` | `timeoutMs` passed. The job is still running; `result(error.jobId)` picks it up. With `cancelOnTimeout` it was canceled and refunded instead (`code` is `wait_timeout_canceled`) |
 | `APIError`, `APIConnectionError` | A problem on Sume's side, or the network. `retryable` says whether trying again can help |
 
 Each error also has `code`, `hint`, `status`, `requestId`, `jobId` and `details`. Quote `requestId` to support. When a submit's outcome is unknown (the network dropped, or Sume answered 5xx), the error names the idempotency key in `idempotencyKey` and in the `Fix:` line: pass it back to get that job instead of paying twice.
@@ -320,7 +327,6 @@ SUME 4183: POST /v1/image-router/generate -> 202 (request req_9c1…, attempt 1,
 | Host | What it is |
 |---|---|
 | `https://api.open.sume.com` (default) | Open's production API. Keys come from open.sume.com |
-| `https://open-api-development.up.railway.app` | Open's development API, for Sume staff. Keys come from open.dev.sume.com |
 | `https://api.sume.com` | **Not Open.** This is sume.com's own API, and Open keys do not work there |
 
 A key works only on the host it was made for. On another host it is refused as if it were wrong, and the error says so.
@@ -346,14 +352,14 @@ The module functions use a shared default client; `new Sume(options)` has the sa
 | Call | Resolves to |
 |---|---|
 | `run(model, prompt?, { …fields, maxUsd, timeoutMs, idempotencyKey, onSubmit, onStatus, onEvent, cancelOnTimeout, signal, input })` | `Result` |
-| `submit(model, prompt?, { …fields, maxUsd, idempotencyKey, signal, input })` | `Job` |
+| `submit(model, prompt?, { …fields, maxUsd, idempotencyKey, slotWaitMs, signal, input })` | `Job` |
 | `estimate(model, prompt?, { …fields, input })` | `Price` (`usd`, `usdMicros`, `String()` → `"$0.0060"`) |
 | `models(kind?)`, `model(id)` | `Model[]`, `Model` (`id`, `name`, `kind`, `price`, `priceFrom`, `per`, `resolutions`, `seconds`, `inputs`) |
 | `upload(file, { contentType?, signal? })` | the file's URL |
 | `job(id)` | `Job`, without a call (not a promise) |
 | `status(id)` | `Status` (`state`, `done`, `ok`, `queuePosition`) |
 | `result(id, { timeoutMs, onStatus, onEvent, cancelOnTimeout, signal })` | `Result`, waiting if the job is still running |
-| `cancel(id)` | `true` when canceled |
+| `cancel(id)` | `true` when canceled, `false` when too late |
 | `listJobs({ limit?, status? })` | `JobInfo[]` |
 | `verifyWebhook(body, headers, secret, { toleranceSeconds? })` | `boolean` (not a promise) |
 | `job.status()`, `job.poll(options)`, `job.wait(options)`, `job.cancel()`, `job.events()`, `job.info()` | `Status`, an async iterator of `Status`, `Result`, `boolean`, `JobEvent[]`, `JobInfo` |

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { assertServer } from "./config.js";
 import {
   APIConnectionError,
@@ -23,6 +23,7 @@ import {
   priced,
   SLOT_WAIT_MS,
   slotDelayMs,
+  TOO_LATE_TO_CANCEL,
   timeoutError,
 } from "./flow.js";
 import { MODEL_KINDS, type ModelId, type ModelInputs } from "./generated.js";
@@ -98,9 +99,9 @@ export interface WaitOptions {
   /** How long to wait in all, in milliseconds (default 30 minutes). The job keeps running past it. */
   timeoutMs?: number;
   /** Called with each status read: `status.state`, `status.queuePosition`. */
-  onStatus?: (status: Status) => void | Promise<void>;
+  onStatus?: (status: Status) => unknown;
   /** Called once with each new step in the job's life: `job.started`, `job.completed`, … */
-  onEvent?: (event: JobEvent) => void | Promise<void>;
+  onEvent?: (event: JobEvent) => unknown;
   /** When the wait runs out, cancel the job if it has not started; it is refunded. */
   cancelOnTimeout?: boolean;
   signal?: AbortSignal;
@@ -111,12 +112,17 @@ export interface SubmitOptions {
   maxUsd?: number | string;
   /** Pass the key of an earlier submit to get that job back instead of paying again. */
   idempotencyKey?: string;
+  /**
+   * How long `submit` waits for a free slot when the account runs as many jobs as it may
+   * (default 10 minutes; 0 throws `RateLimitError` at once). `run` waits within its `timeoutMs`.
+   */
+  slotWaitMs?: number;
   signal?: AbortSignal;
 }
 
 export interface RunOptions extends SubmitOptions, WaitOptions {
   /** Called with the `Job` once it exists, so you can keep its id. */
-  onSubmit?: (job: Job) => void | Promise<void>;
+  onSubmit?: (job: Job) => unknown;
 }
 
 /** What `run` takes after the prompt: the model's fields, plus `RunOptions`. */
@@ -129,6 +135,7 @@ export type EstimateInput<M extends string = string> = InputOf<M> & Extra;
 const CONTROL = [
   "maxUsd",
   "idempotencyKey",
+  "slotWaitMs",
   "timeoutMs",
   "onSubmit",
   "onStatus",
@@ -141,14 +148,15 @@ const CONTROL = [
 function split(promptOrInput: string | Json | undefined, rest: Json | undefined) {
   const { input: extra, ...given }: Json =
     typeof promptOrInput === "object" && promptOrInput !== null ? promptOrInput : (rest ?? {});
-  const all: Json = { ...extra, ...given };
+  // Options come from the top level only: whatever sits in `input` is sent as it is.
   const options: Json = {};
   for (const key of CONTROL) {
-    if (key in all) {
-      options[key] = all[key];
-      delete all[key];
+    if (key in given) {
+      options[key] = given[key];
+      delete given[key];
     }
   }
+  const all: Json = { ...extra, ...given };
   let prompt: string | undefined = typeof promptOrInput === "string" ? promptOrInput : undefined;
   if (prompt === undefined && typeof all.prompt === "string") prompt = all.prompt;
   delete all.prompt;
@@ -329,7 +337,7 @@ export class Job {
    * asks, up to 5 to 15 s. Network errors and Sume-side errors do not end the wait; `timeoutMs` does
    * (`WaitTimeoutError`, and the job keeps running).
    */
-  async *poll(options: Omit<WaitOptions, "onStatus"> = {}): AsyncGenerator<Status> {
+  async *poll(options: Pick<WaitOptions, "timeoutMs" | "signal"> = {}): AsyncGenerator<Status> {
     const transport = this.#client.transport;
     const timeoutMs = options.timeoutMs ?? DEFAULT_WAIT_MS;
     const started = Date.now();
@@ -436,6 +444,7 @@ export class Sume {
   /** @internal */
   readonly transport: Transport;
   readonly #models = new Map<string, Model>();
+  readonly #uploaded = new Map<string, string>();
 
   constructor(options: ClientOptions = {}) {
     assertServer();
@@ -501,7 +510,7 @@ export class Sume {
    * @example
    * String(await estimate("seedance-2-mini", "a paper boat", { duration: 8, resolution: "720p" })); // "$0.5082"
    */
-  estimate<M extends ModelName>(model: M, prompt: string, input?: EstimateInput<M>): Promise<Price>;
+  estimate<M extends ModelName>(model: M, prompt: string | undefined, input?: EstimateInput<M>): Promise<Price>;
   estimate<M extends ModelName>(model: M, input?: EstimateInput<M>): Promise<Price>;
   async estimate(model: string, promptOrInput?: string | Json, input?: Json): Promise<Price> {
     const { prompt, fields } = split(promptOrInput, input);
@@ -527,6 +536,11 @@ export class Sume {
    */
   async upload(file: FileInput, options: { contentType?: string; signal?: AbortSignal } = {}): Promise<string> {
     const payload = await readPayload(file, options.contentType);
+    // The same bytes upload once per client, so a retry with the same idempotency key sends the
+    // same request (and gets its job back), and a batch over one photo uploads it once.
+    const cacheKey = createHash("sha256").update(payload.data).digest("hex") + payload.contentType;
+    const known = this.#uploaded.get(cacheKey);
+    if (known) return known;
     const target = (
       await this.transport.request<Json>("POST", "/v1/assets/upload-url", {
         body: { content_type: payload.contentType, size_bytes: payload.data.length, filename: payload.filename },
@@ -548,6 +562,8 @@ export class Sume {
     ).data.asset;
     if (!asset?.url)
       throw new SumeError(`Sume stored ${payload.filename} but returned no URL for it.`, { code: "upload_incomplete" });
+    if (this.#uploaded.size >= 256) this.#uploaded.delete(this.#uploaded.keys().next().value as string);
+    this.#uploaded.set(cacheKey, asset.url);
     return asset.url;
   }
 
@@ -561,15 +577,21 @@ export class Sume {
    * const image = await sume.run("gpt-image-2", "a red kite over a beach", { quality: "low" });
    * await image.save("kite.png");
    */
-  run<M extends ModelName>(model: M, prompt: string, input?: RunInput<M>): Promise<Result>;
+  run<M extends ModelName>(model: M, prompt: string | undefined, input?: RunInput<M>): Promise<Result>;
   run<M extends ModelName>(model: M, input?: RunInput<M>): Promise<Result>;
   async run(model: string, promptOrInput?: string | Json, input?: Json): Promise<Result> {
     const started = Date.now();
     const { prompt, fields, options } = split(promptOrInput, input);
     const timeoutMs = options.timeoutMs ?? DEFAULT_WAIT_MS;
-    const job = await this.#submit(model, prompt, fields, options, true, timeoutMs);
+    const job = await this.#submit(model, prompt, fields, options, true, started + timeoutMs);
     await options.onSubmit?.(job);
-    return job.wait({ ...options, timeoutMs: Math.max(timeoutMs - (Date.now() - started), 1) });
+    try {
+      return await job.wait({ ...options, timeoutMs: Math.max(started + timeoutMs - Date.now(), 1) });
+    } catch (error) {
+      // Name the timeout the caller set, not what was left of it after the submit.
+      if (!(error instanceof SumeError) || !error.code.startsWith("wait_timeout")) throw error;
+      throw timeoutError(job.id, timeoutMs, error.code === "wait_timeout_canceled");
+    }
   }
 
   /**
@@ -580,11 +602,11 @@ export class Sume {
    * const job = await sume.submit("kling-3", "a red kite over a beach", { duration: 5 });
    * const video = await job.wait();
    */
-  submit<M extends ModelName>(model: M, prompt: string, input?: SubmitInput<M>): Promise<Job>;
+  submit<M extends ModelName>(model: M, prompt: string | undefined, input?: SubmitInput<M>): Promise<Job>;
   submit<M extends ModelName>(model: M, input?: SubmitInput<M>): Promise<Job>;
   async submit(model: string, promptOrInput?: string | Json, input?: Json): Promise<Job> {
     const { prompt, fields, options } = split(promptOrInput, input);
-    return this.#submit(model, prompt, fields, options, false, SLOT_WAIT_MS);
+    return this.#submit(model, prompt, fields, options, false, Date.now() + (options.slotWaitMs ?? SLOT_WAIT_MS));
   }
 
   async #submit(
@@ -593,7 +615,7 @@ export class Sume {
     fields: Json,
     options: RunOptions,
     priceIt: boolean,
-    slotWaitMs: number,
+    deadline: number,
   ): Promise<Job> {
     const kind = await this.#kind(model);
     let body = buildBody(model, kind, prompt, fields);
@@ -602,12 +624,12 @@ export class Sume {
       priceIt || options.maxUsd !== undefined ? this.#estimate(model, estimateInput(body), options.signal) : undefined;
     pricing?.catch(() => undefined);
     if (options.maxUsd !== undefined && pricing) checkBudget(await priced(pricing), options.maxUsd);
-    const urls: string[] = [];
-    for (const slot of uploadSlots(body))
-      urls.push(await this.upload(slot.value as FileInput, { signal: options.signal }));
+    const urls = await Promise.all(
+      uploadSlots(body).map((slot) => this.upload(slot.value as FileInput, { signal: options.signal })),
+    );
     body = withUploads(body, urls);
     const key = options.idempotencyKey ?? randomUUID();
-    const data = await this.#generate(model, kind, body, key, slotWaitMs, options.signal);
+    const data = await this.#generate(model, kind, body, key, deadline, options.signal);
     let usd: string | null = null;
     if (pricing)
       usd = await Promise.race([
@@ -628,10 +650,9 @@ export class Sume {
     kind: string,
     body: Json,
     key: string,
-    slotWaitMs: number,
+    deadline: number,
     signal: AbortSignal | undefined,
   ): Promise<Json> {
-    const deadline = Date.now() + slotWaitMs;
     for (let attempt = 1; ; attempt++) {
       try {
         return (
@@ -695,9 +716,14 @@ export class Sume {
 
   /** Cancel a job that has not started generating. Resolves true when it was canceled; it is refunded. */
   async cancel(id: string): Promise<boolean> {
-    const data = (
-      await this.transport.request<Json>("POST", `/v1/jobs/${encodeURIComponent(id)}/cancel`, { retry: true })
-    ).data;
+    let data: Json;
+    try {
+      data = (await this.transport.request<Json>("POST", `/v1/jobs/${encodeURIComponent(id)}/cancel`, { retry: true }))
+        .data;
+    } catch (error) {
+      if (error instanceof InvalidRequestError && TOO_LATE_TO_CANCEL.has(error.code)) return false;
+      throw error;
+    }
     return Boolean(data.canceled);
   }
 

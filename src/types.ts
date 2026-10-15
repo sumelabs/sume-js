@@ -11,11 +11,22 @@ const UNITS: Record<string, string> = { second: "/s", image: "/image", request: 
 // biome-ignore lint/suspicious/noExplicitAny: API JSON is read by field name, defensively.
 type Json = Record<string, any>;
 
-/** Attach the API's JSON (and a `toString`) without printing them: `console.log` shows the fields only. */
+const INSPECT = Symbol.for("nodejs.util.inspect.custom");
+
+/**
+ * Attach the API's JSON (and a `toString`) as ordinary properties, so spreads, `structuredClone` and
+ * `JSON.stringify` keep them, and hide only them from `console.log`, which shows the fields.
+ */
 function hidden<T extends object>(value: T, raw: Json, describe?: () => string): T {
-  Object.defineProperty(value, "raw", { value: raw, enumerable: false });
-  if (describe) Object.defineProperty(value, "toString", { value: describe, enumerable: false });
-  return value;
+  const out = Object.assign(value, { raw }, describe ? { toString: describe } : {});
+  Object.defineProperty(out, INSPECT, {
+    enumerable: false,
+    value(this: Json, _depth: number, options: object, show: (v: unknown, o: object) => string) {
+      const { raw: _raw, toString: _toString, ...fields } = this;
+      return show(fields, options);
+    },
+  });
+  return out;
 }
 
 /** `text-to-video, image-to-video` → `["text", "image"]`: what a model starts from. */

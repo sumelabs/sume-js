@@ -16,13 +16,32 @@ export interface Payload {
   filename: string;
 }
 
-/** A path, bytes, or a Blob, as bytes with a media type. */
+/** `data:image/png;base64,...` as bytes: the API takes https URLs only, so it is uploaded. */
+function dataUrl(value: string, contentType?: string): Payload {
+  const comma = value.indexOf(",");
+  const parts = value.slice(5, comma < 0 ? undefined : comma).split(";");
+  const body = comma < 0 ? "" : value.slice(comma + 1);
+  const data = parts.includes("base64")
+    ? new Uint8Array(Buffer.from(body, "base64"))
+    : new TextEncoder().encode(decodeURIComponent(body));
+  const kind = contentType ?? (parts[0] || undefined) ?? sniffContentType(data);
+  if (data.length === 0 || !kind) {
+    throw new InvalidRequestError("The data: URL is empty or has no media type.", {
+      hint: "Pass the file's path or bytes instead.",
+      code: "invalid_input",
+    });
+  }
+  return { data, contentType: kind, filename: `upload${extensionFor(kind)}` };
+}
+
+/** A path, a `file:` or `data:` URL, bytes, or a Blob, as bytes with a media type. */
 export async function readPayload(value: unknown, contentType?: string): Promise<Payload> {
   let data: Uint8Array;
   let name: string;
   let kind: string | undefined;
+  if (typeof value === "string" && value.startsWith("data:")) return dataUrl(value, contentType);
   if (typeof value === "string" || value instanceof URL) {
-    const path = value instanceof URL ? fileURLToPath(value) : value;
+    const path = value instanceof URL || value.startsWith("file://") ? fileURLToPath(value) : value;
     const info = await stat(path).catch(() => undefined);
     if (!info?.isFile()) {
       throw new InvalidRequestError(`No such file: ${path}`, {

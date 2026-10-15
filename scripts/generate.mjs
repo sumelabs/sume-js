@@ -30,10 +30,10 @@ const MEDIA = new Set([
 const SHORT = {
   image: {
     image: [
-      "FileInput | FileInput[]",
+      "FileInput | readonly FileInput[]",
       "The input image or images (`image_urls`): a URL, a file path, bytes or a Blob. Uploaded first when not a URL.",
     ],
-    images: ["FileInput[]", "Several input images (`image_urls`). Uploaded first when not URLs."],
+    images: ["readonly FileInput[]", "Several input images (`image_urls`). Uploaded first when not URLs."],
     mask: ["FileInput", "The edit mask (`mask_url`). Uploaded first when not a URL."],
   },
   video: {
@@ -44,9 +44,18 @@ const SHORT = {
     end_image: ["FileInput", "The last frame (`end_image_url`). Uploaded first when not a URL."],
     video: ["FileInput", "The input video (`video_url`). Uploaded first when not a URL."],
     audio: ["FileInput", "The input audio (`audio_url`). Uploaded first when not a URL."],
-    reference_images: ["FileInput[]", "Reference images (`reference_image_urls`). Uploaded first when not URLs."],
-    reference_videos: ["FileInput[]", "Reference videos (`reference_video_urls`). Uploaded first when not URLs."],
-    reference_audios: ["FileInput[]", "Reference audio (`reference_audio_urls`). Uploaded first when not URLs."],
+    reference_images: [
+      "readonly FileInput[]",
+      "Reference images (`reference_image_urls`). Uploaded first when not URLs.",
+    ],
+    reference_videos: [
+      "readonly FileInput[]",
+      "Reference videos (`reference_video_urls`). Uploaded first when not URLs.",
+    ],
+    reference_audios: [
+      "readonly FileInput[]",
+      "Reference audio (`reference_audio_urls`). Uploaded first when not URLs.",
+    ],
   },
 };
 
@@ -97,7 +106,7 @@ const union = (values) => values.map((v) => JSON.stringify(v)).join(" | ");
 const nested = new Map();
 
 function typeOf(name, schema, media) {
-  if (media) return schema.type === "array" ? "FileInput[]" : "FileInput";
+  if (media) return schema.type === "array" ? "readonly FileInput[]" : "FileInput";
   const options = schema.oneOf ?? schema.anyOf;
   if (options) {
     const parts = [...new Set(options.map((o) => typeOf(name, o, false)))];
@@ -112,7 +121,7 @@ function typeOf(name, schema, media) {
   if (kind === "boolean") return "boolean";
   if (kind === "array") {
     const item = typeOf(name, schema.items ?? {}, false);
-    return item.includes("|") ? `Array<${item}>` : `${item}[]`;
+    return item.includes("|") ? `ReadonlyArray<${item}>` : `readonly ${item}[]`;
   }
   if (kind === "object" && schema.properties) return objectType(name, schema);
   return "Record<string, unknown>";
@@ -157,9 +166,49 @@ function modelDoc(m) {
   const parts = [`${m.name} by ${m.company?.name ?? "?"}: ${m.kind}, ${price}.`];
   if (caps.resolutions?.length) parts.push(`Resolutions: ${caps.resolutions.join(", ")}.`);
   if (caps.duration_seconds) parts.push(`Duration: ${caps.duration_seconds.min}–${caps.duration_seconds.max} s.`);
-  if (caps.max_images) parts.push(`Up to ${caps.max_images} images.`);
-  for (const note of m.constraints ?? []) parts.push(note);
+  if (caps.max_images) parts.push(`Up to ${caps.max_images} ${caps.max_images === 1 ? "image" : "images"}.`);
+  const notes = (m.constraints ?? []).flatMap(publicNotes);
+  if (notes.length) parts.push(`${notes.join("; ")}.`);
   return doc(parts.join(" "), 600);
+}
+
+// The catalog's constraints also carry routing notes for Sume staff (which provider serves a
+// model, issue numbers). Keep what a caller needs: inputs, limits and values.
+const INTERNAL = /\bfal\b|fal's|#\d{3,}|higgsfield's own|open only|maps to|\b[a-z0-9-]+\/[a-z0-9./-]+/iu;
+function publicNotes(note) {
+  return String(note)
+    .split(/;\s*/u)
+    .map((clause) =>
+      clause
+        .replace(/^open only \([^)]*\)\s*/iu, "")
+        .replace(/^runs on fal\s+/iu, "")
+        .replace(/\.$/u, "")
+        .trim(),
+    )
+    .filter((clause) => clause && !INTERNAL.test(clause));
+}
+
+// Fields a model refuses, from the catalog's capability flags. Only a flag that is explicitly
+// false removes a field, so a model without flags keeps every field.
+function refused(m) {
+  const caps = m.capabilities ?? {};
+  const no = (flag) => caps[flag] === false;
+  const out = [];
+  if (m.kind === "image") {
+    if (no("image_edit")) out.push("image", "images", "image_urls", "input_urls", "mask", "mask_url", "mask_image_url");
+    return out;
+  }
+  if (no("end_frame")) out.push("end_image", "end_image_url");
+  if (no("reference_images")) out.push("reference_images", "reference_image_urls");
+  if (no("reference_videos")) out.push("reference_videos", "reference_video_urls");
+  if (no("reference_audios")) out.push("reference_audios", "reference_audio_urls");
+  if (no("image_to_video")) out.push("image", "image_url");
+  if (no("video_to_video")) out.push("video", "video_url");
+  if (Array.isArray(caps.aspect_ratios) && caps.aspect_ratios.length === 0) out.push("aspect_ratio");
+  if (!caps.captions) out.push("captions");
+  if ((caps.lipsync || caps.captions) && (m.constraints ?? []).some((c) => /\bno prompt\b/iu.test(c)))
+    out.push("prompt");
+  return out;
 }
 
 // Each model's own values, offered as suggestions; any other string still type-checks, because the
@@ -184,19 +233,25 @@ for (const m of catalog) {
   if (typeNames.has(typeName)) throw new Error(`${m.id} and ${typeNames.get(typeName)} would share ${typeName}`);
   typeNames.set(typeName, m.id);
   const router = routerFields[m.kind === "image" ? "image" : "video"];
+  const has = (key) => router.some(([k]) => k === key) || key in SHORT[m.kind === "image" ? "image" : "video"];
+  const dropped = refused(m).filter(has);
   const fields = hints(m).flatMap(([label, values]) => {
     const field = router.find(([k]) => k === label);
-    if (!field) return [];
+    if (!field || dropped.includes(label)) return [];
     const text = doc(`${field[2] ? `${field[2]} ` : ""}${m.name} lists ${values.join(", ")}.`, 600);
-    return [`${jsdoc(text)}  ${label}?: ${union(values)} | (string & {});`];
+    return [[label, `${jsdoc(text)}  ${label}?: ${union(values)} | (string & {});`]];
   });
-  const body = fields.length
-    ? `Omit<${base}, ${hints(m)
-        .filter(([label]) => router.some(([k]) => k === label))
-        .map(([label]) => JSON.stringify(label))
-        .join(" | ")}> & {\n${fields.join("\n")}\n}`
-    : base;
-  models += `/** ${modelDoc(m)} */\nexport type ${typeName} = ${body};\n\n`;
+  // Lip-sync and captions are billed by the clip's length, so they need it.
+  const durationField = router.find(([k]) => k === "duration");
+  if ((m.kind === "lipsync" || m.kind === "captions") && durationField) {
+    fields.push([
+      "duration",
+      `${jsdoc(`${durationField[2]} Required: the clip's length in whole seconds.`)}  duration: number;`,
+    ]);
+  }
+  const omit = [...new Set([...dropped, ...fields.map(([label]) => label)])];
+  const parent = omit.length ? `Omit<${base}, ${omit.map((k) => JSON.stringify(k)).join(" | ")}>` : base;
+  models += `/** ${modelDoc(m)} */\nexport interface ${typeName} extends ${parent} {\n${fields.map(([, line]) => line).join("\n")}${fields.length ? "\n" : ""}}\n\n`;
   map += `  ${JSON.stringify(m.id)}: ${typeName};\n`;
 }
 

@@ -23,6 +23,18 @@ Types for every model and field, progress callbacks, and a client that waits ins
 
 ### Changed
 
+- A full account and an empty balance now raise `RateLimitError` and `InsufficientFundsError`. The API answers both with the refused job in `details`, which 0.1.0 read as `JobFailedError`, so the slot wait never ran and the top-up hint never showed.
+- `cancel` returns `false` when the job has already started or ended, instead of raising.
+- A wait that runs out names the timeout you set. `run({ timeoutMs })` spends one budget across the slot wait, the uploads and the wait. When `cancelOnTimeout` cancels the job, the error's code is `wait_timeout_canceled`.
+- With `maxUsd`, a request the API refuses keeps its error class and field errors.
+- `idempotency_conflict` names the job that the key already made (`error.jobId`), with the call that gets it.
+- The same bytes upload once per client. A retry with the same idempotency key then sends the same request and gets its job back, and a batch over one photo uploads it once. `data:` URLs are uploaded; `http://` media URLs are refused before anything is spent. A string counts as a path inside `frame_images` and `input_references`, never inside `metadata`.
+- `headers` drops the names the client sets itself (`authorization`, `idempotency-key`, `content-type`).
+- Callbacks may return anything.
+- `slotWaitMs` on `submit` bounds how long a busy account waits (`0` throws at once).
+- The module functions keep the options after an undefined prompt; 0.1.0 dropped them, `maxUsd` included.
+- The model types now leave out the fields a model refuses, by the catalog's flags. Lip-sync and captions require `duration`, and media lists accept readonly arrays. Code typed with the general `Input` for a known model should use `InputOf<"model-id">`.
+- A spread or `structuredClone` of a `Status`, `Model` or `Price` keeps `raw` (printing still hides it). The model docs no longer carry the catalog's internal routing notes.
 - Models this version knows skip the catalog lookup before a submit. A model that is not in the catalog still gets a "Did you mean" suggestion.
 - `console.log` of a `Model`, `Status`, `Price`, `JobEvent`, `JobInfo` or `Result` shows its fields, not the API's JSON; `raw` still holds it.
 - `dist/browser.d.ts` re-exports the real declarations. The published types need no `@types/node`; the package smoke type-checks a project without it.

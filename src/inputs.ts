@@ -120,10 +120,23 @@ function isFileObject(value: unknown): boolean {
 }
 
 function needsUpload(value: unknown, inMediaField: boolean): boolean {
-  // A string is a file path only where a media URL belongs; elsewhere it is text.
-  if (typeof value === "string") return inMediaField && !isHttpUrl(value) && !value.startsWith("data:");
+  if (typeof value === "string") {
+    // A string is a file only where a media URL belongs; elsewhere it is text.
+    if (!inMediaField) return false;
+    if (/^http:\/\//iu.test(value)) {
+      throw new InvalidRequestError(`The API takes https media URLs only: ${value.slice(0, 80)}`, {
+        hint: "Use the https address, or pass the file itself (a path or bytes) to upload it.",
+        code: "invalid_input",
+      });
+    }
+    // A path, a file: URL or a data: URL; an https URL goes as it is.
+    return !isHttpUrl(value);
+  }
   return isFileObject(value);
 }
+
+/** Lists of `{ type, image_url: { url } }` entries, whose `url` is a media URL. */
+export const NESTED_MEDIA_FIELDS = new Set(["frame_images", "input_references"]);
 
 /** Where a value sits in the body: `["image_urls", 0]`, `["input_references", 0, "image_url", "url"]`. */
 export type BodyPath = (string | number)[];
@@ -142,8 +155,13 @@ export function uploadSlots(body: Record<string, unknown>): { path: BodyPath; va
     } else if (isPlainObject(value)) {
       const parent = path[path.length - 1];
       for (const [k, v] of Object.entries(value)) {
-        // `{ image_url: { url } }` inside a list like `frame_images` is a media URL too.
-        const media = inMediaField || (k === "url" && typeof parent === "string" && parent.endsWith("_url"));
+        // `{ image_url: { url } }` inside `frame_images` or `input_references` is a media URL too.
+        const media =
+          inMediaField ||
+          (NESTED_MEDIA_FIELDS.has(path[0] as string) &&
+            k === "url" &&
+            typeof parent === "string" &&
+            parent.endsWith("_url"));
         walk(v, [...path, k], media);
       }
     }

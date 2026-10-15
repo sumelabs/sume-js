@@ -95,7 +95,13 @@ export class Transport {
     this.#timeoutMs = options.timeoutMs ?? 60_000;
     this.#maxRetries = options.maxRetries ?? 3;
     this.#fetch = options.fetch ?? ((...args) => globalThis.fetch(...args));
-    this.#headers = Object.fromEntries(Object.entries(options.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+    // The client sets these itself, per call; a stray Idempotency-Key on every call would be wrong.
+    const reserved = new Set(["authorization", "idempotency-key", "content-type", "content-length", "host"]);
+    this.#headers = Object.fromEntries(
+      Object.entries(options.headers ?? {})
+        .map(([k, v]) => [k.toLowerCase(), v] as const)
+        .filter(([k]) => !reserved.has(k)),
+    );
     this.sleep = options.sleep ?? sleep;
   }
 

@@ -163,7 +163,14 @@ export class MockApi {
     if (!m) return this.error(404, "model_not_found", "No such model.");
     if (this.slotsBusy > 0) {
       this.slotsBusy--;
-      return this.error(429, "concurrency_limit_reached", "Too many jobs in flight.", { retryable: true });
+      // As the real API answers an account at its cap: 400, with the refused job (failed) in details.
+      return this.error(400, "concurrency_limit_reached", "Too many jobs in flight.", {
+        retryable: true,
+        details: {
+          job: { id: `job_refused_${this.slotsBusy}`, status: "failed", error: { code: "queue_full" } },
+          retry_after_seconds: 30,
+        },
+      });
     }
     if (this.rejectFields) {
       return this.error(400, "invalid_request", "The request is invalid.", {
@@ -186,7 +193,11 @@ export class MockApi {
     const price = m.kind === "image" ? 0.0077 : 0.0879 * Number(body.duration ?? 4);
     if (price > this.balanceUsd) {
       return this.error(402, "insufficient_funds", "Balance too low.", {
-        details: { required_usd: price.toFixed(4), available_usd: "0.00" },
+        details: {
+          required_usd: price.toFixed(4),
+          available_usd: "0.00",
+          job: { id: "job_refused_funds", status: "failed", error: { code: "insufficient_funds" } },
+        },
       });
     }
     const id = `job_${String(this.jobs.size + 1).padStart(8, "0")}-0000-0000-0000-000000000000`;

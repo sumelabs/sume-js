@@ -45,7 +45,7 @@ export function timeoutError(jobId: string, timeoutMs: number, canceled = false)
   if (canceled) {
     return new WaitTimeoutError(
       `Stopped waiting after ${Math.round(timeoutMs / 1000)} s, and canceled job ${jobId} before it started. It is refunded.`,
-      { hint: "Raise timeoutMs, or submit when the queue is shorter.", code: "wait_timeout", jobId },
+      { hint: "Raise timeoutMs, or submit when the queue is shorter.", code: "wait_timeout_canceled", jobId },
     );
   }
   return new WaitTimeoutError(
@@ -99,24 +99,23 @@ export function checkBudget(price: Price, maxUsd: number | string): void {
   }
 }
 
-/** The price, or why maxUsd could not be checked (and so nothing was submitted). */
+/**
+ * The price, or why maxUsd could not be checked (and so nothing was submitted). The error keeps
+ * its class and fields: a refused field is still an `InvalidRequestError` with `fieldErrors`.
+ */
 export async function priced(pricing: Promise<Price>): Promise<Price> {
   try {
     return await pricing;
   } catch (error) {
     if (!(error instanceof SumeError)) throw error;
-    throw new SumeError(
-      `Could not price the request (${error.reason}), so maxUsd cannot be checked. Nothing was submitted.`,
-      {
-        hint: error.hint,
-        code: error.code,
-        status: error.status,
-        requestId: error.requestId,
-        retryable: error.retryable,
-      },
-    );
+    error.reason = `Could not price the request (${error.reason}), so maxUsd cannot be checked. Nothing was submitted.`;
+    error.message = error.compose();
+    throw error;
   }
 }
+
+/** What the API answers when a job has already started generating, or has ended. */
+export const TOO_LATE_TO_CANCEL = new Set(["job_generation_already_started", "job_not_cancelable"]);
 
 function levenshtein(a: string, b: string): number {
   let previous = Array.from({ length: b.length + 1 }, (_, j) => j);

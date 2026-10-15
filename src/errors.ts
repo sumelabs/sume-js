@@ -53,7 +53,7 @@ export class SumeError extends Error {
   /** Each field the API refused, for a request it rejected. Empty otherwise. */
   readonly fieldErrors: FieldError[];
   /** What went wrong, without the request id or the fix. */
-  readonly reason: string;
+  reason: string;
 
   constructor(reason: string, options: SumeErrorOptions = {}) {
     super(reason);
@@ -135,6 +135,14 @@ export function fieldErrors(details: unknown): FieldError[] {
   );
 }
 
+const ACCOUNT_CODES = new Set([
+  "concurrency_limit_reached",
+  "queue_full",
+  "insufficient_funds",
+  "insufficient_credits",
+  "unauthorized",
+]);
+
 /** Turn the API's `error` envelope into the error class that says what to do. */
 export function errorFromResponse(
   status: number,
@@ -145,7 +153,13 @@ export function errorFromResponse(
   const code = body.code ?? `http_${status}`;
   const message = body.message ?? `The API answered ${status}.`;
   const details = body.details;
-  const retryAfter = typeof body.retry_after_seconds === "number" ? body.retry_after_seconds : undefined;
+  const detailWait = isRecord(details) ? details.retry_after_seconds : undefined;
+  const retryAfter =
+    typeof body.retry_after_seconds === "number"
+      ? body.retry_after_seconds
+      : typeof detailWait === "number"
+        ? detailWait
+        : undefined;
   const common: SumeErrorOptions = {
     code,
     status,
@@ -159,8 +173,16 @@ export function errorFromResponse(
 
   // A provider can refuse a job the moment it is submitted: the API answers
   // with the job already failed. That is a failed job (refunded), not a bad request.
+  // Refusals about the account (its job cap, its balance, its key) carry the refused job too,
+  // but they are about the account, so they get their own classes below.
   const job = isRecord(details) ? details.job : undefined;
-  if (isRecord(job) && (job.status === "failed" || job.status === "canceled") && typeof job.id === "string") {
+  const aboutAccount = ACCOUNT_CODES.has(code) || [401, 402, 403, 429].includes(status);
+  if (
+    !aboutAccount &&
+    isRecord(job) &&
+    (job.status === "failed" || job.status === "canceled") &&
+    typeof job.id === "string"
+  ) {
     const reason = isRecord(job.error) && typeof job.error.message === "string" ? job.error.message : message;
     return new JobFailedError(`Job ${job.id} ${job.status}: ${reason}`, {
       ...common,
@@ -191,7 +213,7 @@ export function errorFromResponse(
     });
   }
   if (status === 403) return new AuthenticationError(message, { ...common, hint: otherHostHint(baseUrl) });
-  if (code === "insufficient_funds" || status === 402) {
+  if (code === "insufficient_funds" || code === "insufficient_credits" || status === 402) {
     const need = detail.required_usd;
     const have = detail.available_usd;
     const amounts =
@@ -226,9 +248,15 @@ export function errorFromResponse(
     });
   }
   if (code === "idempotency_conflict") {
+    const existing = detail.job_id;
     return new InvalidRequestError(message, {
       ...common,
-      hint: "That idempotency key belongs to a different request. Use a new key.",
+      ...(typeof existing === "string"
+        ? {
+            jobId: existing,
+            hint: `That key already made job ${existing}: get it with result("${existing}"). Use a new key only for a new job.`,
+          }
+        : { hint: "That idempotency key belongs to a different request. Use a new key." }),
     });
   }
   if (status >= 400 && status < 500) {

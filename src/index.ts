@@ -81,24 +81,29 @@ const client = () => {
  * const image = await run("gpt-image-2", "a red kite over a beach", { quality: "low" });
  * await image.save("kite.png");
  */
-export function run<M extends ModelName>(model: M, prompt: string, input?: RunInput<M>): Promise<Result>;
+export function run<M extends ModelName>(model: M, prompt: string | undefined, input?: RunInput<M>): Promise<Result>;
 export function run<M extends ModelName>(model: M, input?: RunInput<M>): Promise<Result>;
 export function run(model: string, a?: string | RunInput, b?: RunInput): Promise<Result> {
-  return typeof a === "string" ? client().run(model, a, b) : client().run(model, a);
+  // Both arguments always go through: an undefined prompt must not drop the options after it.
+  return client().run(model, a as string | undefined, b);
 }
 
 /** Start a job and return at once; `job.wait()` gets its `Result` later. See `Sume.submit`. */
-export function submit<M extends ModelName>(model: M, prompt: string, input?: SubmitInput<M>): Promise<Job>;
+export function submit<M extends ModelName>(model: M, prompt: string | undefined, input?: SubmitInput<M>): Promise<Job>;
 export function submit<M extends ModelName>(model: M, input?: SubmitInput<M>): Promise<Job>;
 export function submit(model: string, a?: string | SubmitInput, b?: SubmitInput): Promise<Job> {
-  return typeof a === "string" ? client().submit(model, a, b) : client().submit(model, a);
+  return client().submit(model, a as string | undefined, b);
 }
 
 /** What a request would cost, in dollars. Free, and needs no key. See `Sume.estimate`. */
-export function estimate<M extends ModelName>(model: M, prompt: string, input?: EstimateInput<M>): Promise<Price>;
+export function estimate<M extends ModelName>(
+  model: M,
+  prompt: string | undefined,
+  input?: EstimateInput<M>,
+): Promise<Price>;
 export function estimate<M extends ModelName>(model: M, input?: EstimateInput<M>): Promise<Price>;
 export function estimate(model: string, a?: string | EstimateInput, b?: EstimateInput): Promise<Price> {
-  return typeof a === "string" ? client().estimate(model, a, b) : client().estimate(model, a);
+  return client().estimate(model, a as string | undefined, b);
 }
 
 /** A handle on a job you already have the id of. */

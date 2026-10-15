@@ -99,6 +99,7 @@ describe("run", () => {
       "video applies to video models",
     );
     await expect(
+      // @ts-expect-error lip-sync needs duration
       sume.run("veed-lipsync", { video: "https://e.com/a.mp4", audio: "https://e.com/a.wav" }),
     ).rejects.toThrow(InvalidRequestError);
   });
@@ -197,7 +198,7 @@ describe("jobs", () => {
     const queued = await sume.submit("gpt-image-2", "another kite");
     expect(await queued.cancel()).toBe(true);
     await expect(queued.wait()).rejects.toThrow("was canceled");
-    await expect(sume.cancel(job.id)).rejects.toThrow("Generation has started");
+    expect(await sume.cancel(job.id)).toBe(false); // it already ran: too late to cancel
     expect((await sume.listJobs()).map((j) => j.id).slice(0, 2)).toEqual([queued.id, job.id]);
   });
 

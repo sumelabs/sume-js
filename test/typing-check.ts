@@ -14,6 +14,7 @@ import {
 export async function valid(): Promise<Result[]> {
   const sume = new Sume({ headers: { "x-trace-id": "abc" } });
   const options: GptImage2Input = { quality: "low", aspect_ratio: "16:9" };
+  const events: string[] = [];
   const job = await submit("seedance-2-mini", "a paper boat", { duration: 5, resolution: "480p", maxUsd: 1 });
   await estimate("kling-3", "a kite", { duration: 5, resolution: "720p" }); // not in the catalog's list: still a string
   return [
@@ -23,7 +24,7 @@ export async function valid(): Promise<Result[]> {
       image: "photo.png",
       duration: 5,
       onStatus: (s: Status) => void s.queuePosition,
-      onEvent: (e) => void e.type,
+      onEvent: (e) => events.push(e.type), // a callback may return anything
       cancelOnTimeout: true,
     }),
     await run("veed-subtitles", { video: "talk.mp4", duration: 30, captions: { position: "bottom" } }),
@@ -44,6 +45,10 @@ export async function mistakes(): Promise<void> {
   await run("seedance-2-mini", "a boat", { mask: "mask.png" });
   // @ts-expect-error maxUsd is a number of dollars
   await run("gpt-image-2", "a kite", { maxUsd: true });
+  // @ts-expect-error kling-3 takes no reference images (the catalog says so)
+  await run("kling-3", "a kite", { duration: 5, reference_images: ["a.png"] });
+  // @ts-expect-error lip-sync is billed by the clip's length, so duration is required
+  await run("veed-lipsync", { video: "talk.mp4", audio: "line.wav" });
   // @ts-expect-error not a model this version knows, as a ModelId
   const id: ModelId = "gpt-image-3";
   void id;
