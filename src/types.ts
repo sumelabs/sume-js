@@ -35,13 +35,13 @@ export interface Model {
   name: string;
   kind: ModelKind;
   company: string;
-  /** Dollars per `per` for the cheapest option, like `"0.0077"`. */
+  /** Dollars per `per` for the cheapest option, like `"0.0060"`. */
   priceFrom: string;
   /** Dollars per `per` for the dearest option, when it differs. */
   priceTo: string | null;
   /** `image` or `second`. */
   per: string;
-  /** `$0.0077/image` or `$0.0879–$0.1890/s`. */
+  /** `$0.0060/image` or `$0.02936–$0.06352/s`. */
   price: string;
   inputs: string[];
   modes: string[];
@@ -79,7 +79,7 @@ export function modelFromApi(data: Json): Model {
 /** What a request costs, in US dollars. Pricing is free and needs no key. */
 export interface Price {
   model: string;
-  /** Dollars, as the API writes them: `"0.0077"`. */
+  /** Dollars, as the API writes them: `"0.0060"`. */
   usd: string;
   usdMicros: number;
   raw: Json;

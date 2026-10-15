@@ -16,19 +16,7 @@ await image.save("kite.png");
 
 That is the whole program. `run` prices the request and submits it, uploading any local files first. It waits for the job and returns the files; `save` writes them to disk. This one cost $0.0060.
 
-- [Install](#install)
-- [Key](#key)
-- [Run a model](#run-a-model)
-- [Types](#types)
-- [Pick a model](#pick-a-model)
-- [Progress, long jobs and cancel](#progress-long-jobs-and-cancel)
-- [Files](#files)
-- [In a web app](#in-a-web-app)
-- [Webhooks](#webhooks)
-- [Errors](#errors)
-- [Configuration](#configuration)
-- [Coming from fal or Higgsfield](#coming-from-fal-or-higgsfield)
-- [Reference](#reference)
+[Install](#install) · [Key](#key) · [Run a model](#run-a-model) · [Types](#types) · [Pick a model](#pick-a-model) · [Progress, long jobs and cancel](#progress-long-jobs-and-cancel) · [Files](#files) · [In a web app](#in-a-web-app) · [Webhooks](#webhooks) · [Errors](#errors) · [Configuration](#configuration) · [Coming from fal or Higgsfield](#coming-from-fal-or-higgsfield) · [Reference](#reference)
 
 ## Install
 
@@ -57,7 +45,7 @@ import { run } from "@sume-com/open";
 
 // Text to image
 const image = await run("gpt-image-2", "a ceramic cup on a wooden table, morning light", { quality: "low" });
-console.log(image.url, image.usd); // https://…/….png 0.0060
+console.log(image.url, image.usd); // https://media.sume.com/…/….png 0.0060
 
 // Edit an image: local files are uploaded first
 const night = await run("gpt-image-2", "the same cup at night, candlelight", { image: "cup.png" });

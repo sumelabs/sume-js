@@ -147,6 +147,13 @@ describe("errors and inputs", () => {
     expect(other.some((r) => r.headers.has("x-trace-id"))).toBe(false);
   });
 
+  it("the prompt by position wins over the prompt by name", async () => {
+    const sume = make();
+    await sume.run("gpt-image-2", "by position", { prompt: "by name" });
+    await sume.run("gpt-image-2", { prompt: "only by name" });
+    expect(api.bodies("/v1/image-router/generate").map((b) => b.prompt)).toEqual(["by position", "only by name"]);
+  });
+
   it("input passes fields the types do not list", async () => {
     await make().run("gpt-image-2", "a kite", { input: { future_field: 1 }, quality: "low" });
     const [body] = api.bodies("/v1/image-router/generate");

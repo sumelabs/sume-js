@@ -220,7 +220,7 @@ export class GeneratedFile {
 export class Result {
   readonly jobId: string;
   readonly model: string | null;
-  /** What it cost in US dollars, like `"0.0077"`, when the price was known. */
+  /** What it cost in US dollars, like `"0.0060"`, when the price was known. */
   readonly usd: string | null;
   /** The files you asked for (a video's poster frame is left out). */
   readonly files: GeneratedFile[];
@@ -499,7 +499,7 @@ export class Sume {
    * What a request would cost, in dollars. Free, and needs no key. Files are not uploaded to price it.
    *
    * @example
-   * String(await estimate("seedance-2-mini", "a paper boat", { duration: 8, resolution: "720p" })); // "$0.5085"
+   * String(await estimate("seedance-2-mini", "a paper boat", { duration: 8, resolution: "720p" })); // "$0.5082"
    */
   estimate<M extends ModelName>(model: M, prompt: string, input?: EstimateInput<M>): Promise<Price>;
   estimate<M extends ModelName>(model: M, input?: EstimateInput<M>): Promise<Price>;
