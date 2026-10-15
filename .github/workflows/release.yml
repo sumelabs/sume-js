@@ -1,0 +1,80 @@
+name: Release
+
+# Push a tag like v0.1.0. The workflow checks that the tag matches the
+# version, tests, builds, packs, smoke-tests the tarball, attests it, and
+# publishes a GitHub release with it (also as sume-open.tgz, a stable name
+# for "latest").
+#
+# npm: the `npm` job publishes with Trusted Publishing once a maintainer of
+# the @sume-com scope has published the package once and added this
+# repository and workflow as its trusted publisher, and the repository
+# variable PUBLISH_TO_NPM is `true`. Until then it is skipped.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: The tag matches the version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p 'require("./package.json").version')"
+          code="$(sed -n 's/.*VERSION = "\(.*\)".*/\1/p' src/version.ts)"
+          test "$tag" = "$version" && test "$tag" = "$code" || { echo "::error::tag $tag, package.json $version, src/version.ts $code"; exit 1; }
+          grep -q "## \[$tag\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no [$tag] section"; exit 1; }
+      - run: npm ci
+      - run: npm run lint && npm run typecheck && npm test && npm run build
+      - run: node scripts/smoke-package.mjs
+      - name: Pack
+        run: |
+          mkdir out
+          npm pack --pack-destination out
+          cp out/sume-com-open-*.tgz out/sume-open.tgz
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/*
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v v="${GITHUB_REF_NAME#v}" '$0 ~ "^## \\[" v "\\]" {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md > notes.md
+          printf '\n## Install\n\n```sh\nnpm install https://github.com/%s/releases/download/%s/sume-open.tgz\n```\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" >> notes.md
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" out/* --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: out/sume-com-open-*.tgz
+
+  npm:
+    needs: build
+    if: vars.PUBLISH_TO_NPM == 'true'
+    runs-on: ubuntu-24.04
+    environment: npm
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+      - run: npm publish sume-com-open-*.tgz --access public
