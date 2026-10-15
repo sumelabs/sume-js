@@ -17,7 +17,7 @@ const MAX_RETRY_DELAY_MS = 30_000;
 const TRANSFER_TIMEOUT_MS = 15 * 60_000;
 
 /** `NODE_DEBUG=sume` prints one line per API call: method, path, status, request id, attempt, time. Never the key. */
-export const debug = debuglog("sume");
+export const debug: (message: string, ...args: unknown[]) => void = debuglog("sume");
 
 export interface TransportOptions {
   apiKey?: string | undefined;

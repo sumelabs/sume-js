@@ -25,7 +25,7 @@ Types for every model and field, progress callbacks, and a client that waits ins
 
 - Models this version knows skip the catalog lookup before a submit. A model that is not in the catalog still gets a "Did you mean" suggestion.
 - `console.log` of a `Model`, `Status`, `Price`, `JobEvent`, `JobInfo` or `Result` shows its fields, not the API's JSON; `raw` still holds it.
-- `dist/browser.d.ts` re-exports the real declarations.
+- `dist/browser.d.ts` re-exports the real declarations. The published types need no `@types/node`; the package smoke type-checks a project without it.
 
 ## [0.1.0] - 2026-10-15
 
