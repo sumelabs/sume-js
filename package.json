@@ -1,6 +1,6 @@
 {
   "name": "@sume-com/open",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Images and video from the Sume Open API: one call to run any open.sume.com model and save the file. Server-side.",
   "keywords": [
     "sume",
@@ -51,7 +51,7 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/finish-build.mjs",
-    "check": "npm run lint && npm run typecheck && npm test && npm run build && node scripts/smoke-package.mjs",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build && node scripts/check-readme.mjs && node scripts/smoke-package.mjs",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "test": "vitest run",

@@ -21,6 +21,8 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+      - name: The README's examples type-check
+        run: node scripts/check-readme.mjs
       - name: Pack, install in a clean project, import as ESM and CJS, refuse the browser condition
         run: node scripts/smoke-package.mjs
 

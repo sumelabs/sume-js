@@ -1,5 +1,13 @@
-import { JobFailedError, NotFoundError, OverBudgetError, SumeError, WaitTimeoutError } from "./errors.js";
-import { describe, mediaSlots, withMedia } from "./inputs.js";
+import {
+  type FieldError,
+  JobFailedError,
+  NotFoundError,
+  OverBudgetError,
+  RateLimitError,
+  SumeError,
+  WaitTimeoutError,
+} from "./errors.js";
+import { describe, uploadSlots, withUploads } from "./inputs.js";
 import type { Price, Status } from "./types.js";
 
 /** How long `run` and `wait` wait by default: 30 minutes. Video can take 10 or more. */
@@ -33,7 +41,13 @@ export function firstDelayMs(submit: Record<string, unknown>): number {
   return typeof hint === "number" ? Math.min(Math.max(hint, 0), maxDelaySeconds(0)) * 1000 : 0;
 }
 
-export function timeoutError(jobId: string, timeoutMs: number): WaitTimeoutError {
+export function timeoutError(jobId: string, timeoutMs: number, canceled = false): WaitTimeoutError {
+  if (canceled) {
+    return new WaitTimeoutError(
+      `Stopped waiting after ${Math.round(timeoutMs / 1000)} s, and canceled job ${jobId} before it started. It is refunded.`,
+      { hint: "Raise timeoutMs, or submit when the queue is shorter.", code: "wait_timeout", jobId },
+    );
+  }
   return new WaitTimeoutError(
     `Stopped waiting after ${Math.round(timeoutMs / 1000)} s; job ${jobId} is still running.`,
     {
@@ -42,6 +56,18 @@ export function timeoutError(jobId: string, timeoutMs: number): WaitTimeoutError
       jobId,
     },
   );
+}
+
+/** How long `submit` waits for a free slot when the account has as many jobs running as it may. */
+export const SLOT_WAIT_MS = 10 * 60_000;
+
+/** The account is at its limit of running jobs: wait for a slot, then submit again. */
+export const isFull = (error: unknown): error is RateLimitError => error instanceof RateLimitError;
+
+/** How long to wait before asking for a slot again: the API's word, else 2, 4, 8, … up to 15 s. */
+export function slotDelayMs(error: SumeError, attempt: number): number {
+  if (error.retryAfterSeconds) return Math.min(error.retryAfterSeconds, 30) * 1000;
+  return Math.min(2 ** attempt, 15) * 1000;
 }
 
 export function failure(jobId: string, state: string, job: Record<string, unknown> | undefined): JobFailedError {
@@ -108,6 +134,31 @@ function levenshtein(a: string, b: string): number {
   return previous[b.length] as number;
 }
 
+const LISTED: Record<string, string> = {
+  aspect_ratio: "aspect_ratios",
+  resolution: "resolutions",
+  quality: "qualities",
+  output_format: "output_formats",
+};
+
+/** What to do about refused fields: the values the catalog lists for them, then where to look. */
+export function fieldHint(modelId: string, capabilities: unknown, fields: readonly FieldError[]): string {
+  const caps = (typeof capabilities === "object" && capabilities !== null ? capabilities : {}) as Record<
+    string,
+    unknown
+  >;
+  const parts: string[] = [];
+  for (const field of fields) {
+    const span = caps.duration_seconds as { min?: unknown; max?: unknown } | undefined;
+    const values = caps[LISTED[field.path] ?? ""];
+    if (field.path === "duration" && span?.min !== undefined && span.max !== undefined) {
+      parts.push(`duration ${span.min}–${span.max} s`);
+    } else if (Array.isArray(values) && values.length > 0) parts.push(`${field.path} ${values.join(", ")}`);
+  }
+  const takes = parts.length > 0 ? `${modelId} takes ${parts.join("; ")}. ` : "";
+  return `${takes}See all its fields with model("${modelId}").`;
+}
+
 export function modelNotFound(modelId: string, known: readonly string[]): NotFoundError {
   let best: string | undefined;
   let bestDistance = Number.POSITIVE_INFINITY;
@@ -125,8 +176,8 @@ export function modelNotFound(modelId: string, known: readonly string[]): NotFou
 
 /** The body with placeholders for files not yet uploaded: the price does not depend on their URLs. */
 export function estimateInput(body: Record<string, unknown>): Record<string, unknown> {
-  return withMedia(
+  return withUploads(
     body,
-    mediaSlots(body).map((slot) => `https://upload.invalid/${encodeURIComponent(describe(slot.value))}`),
+    uploadSlots(body).map((slot) => `https://upload.invalid/${encodeURIComponent(describe(slot.value))}`),
   );
 }

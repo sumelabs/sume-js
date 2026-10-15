@@ -17,6 +17,14 @@ export interface SumeErrorOptions {
   jobId?: string | undefined;
   idempotencyKey?: string | undefined;
   retryAfterSeconds?: number | undefined;
+  fieldErrors?: FieldError[] | undefined;
+}
+
+/** One field the API refused, like `{ path: "duration", message: "must be between 4 and 15" }`. */
+export interface FieldError {
+  /** The field, as the API names it (`duration`, `image_urls[0]`). Empty for the request as a whole. */
+  path: string;
+  message: string;
 }
 
 /**
@@ -42,6 +50,8 @@ export class SumeError extends Error {
   idempotencyKey: string | undefined;
   /** Seconds the API asked to wait before retrying, when it said. */
   readonly retryAfterSeconds: number | undefined;
+  /** Each field the API refused, for a request it rejected. Empty otherwise. */
+  readonly fieldErrors: FieldError[];
   /** What went wrong, without the request id or the fix. */
   readonly reason: string;
 
@@ -58,6 +68,7 @@ export class SumeError extends Error {
     this.jobId = options.jobId;
     this.idempotencyKey = options.idempotencyKey;
     this.retryAfterSeconds = options.retryAfterSeconds;
+    this.fieldErrors = options.fieldErrors ?? [];
     this.message = this.compose();
   }
 
@@ -65,6 +76,7 @@ export class SumeError extends Error {
   compose(): string {
     let line = this.reason;
     if (this.requestId) line += ` (request ${this.requestId})`;
+    for (const field of this.fieldErrors ?? []) line += `\n  - ${field.path ? `${field.path}: ` : ""}${field.message}`;
     if (this.hint) line += `\nFix: ${this.hint}`;
     return line;
   }
@@ -112,14 +124,15 @@ function otherHostHint(baseUrl: string): string {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** `details.errors[]` as `field: message` lines. */
-export function fieldErrors(details: unknown): string[] {
+/** The API's `details.errors[]`, one entry per refused field. */
+export function fieldErrors(details: unknown): FieldError[] {
   const errors = isRecord(details) ? details.errors : undefined;
   if (!Array.isArray(errors)) return [];
-  return errors.flatMap((entry) => {
-    if (!isRecord(entry) || typeof entry.message !== "string") return [];
-    return [typeof entry.path === "string" && entry.path ? `${entry.path}: ${entry.message}` : entry.message];
-  });
+  return errors.flatMap((entry) =>
+    isRecord(entry) && typeof entry.message === "string"
+      ? [{ path: typeof entry.path === "string" ? entry.path : "", message: entry.message }]
+      : [],
+  );
 }
 
 /** Turn the API's `error` envelope into the error class that says what to do. */
@@ -130,7 +143,7 @@ export function errorFromResponse(
   baseUrl: string,
 ): SumeError {
   const code = body.code ?? `http_${status}`;
-  let message = body.message ?? `The API answered ${status}.`;
+  const message = body.message ?? `The API answered ${status}.`;
   const details = body.details;
   const retryAfter = typeof body.retry_after_seconds === "number" ? body.retry_after_seconds : undefined;
   const common: SumeErrorOptions = {
@@ -142,7 +155,7 @@ export function errorFromResponse(
     retryAfterSeconds: retryAfter && retryAfter > 0 ? retryAfter : undefined,
   };
   const fields = fieldErrors(details);
-  if (fields.length > 0) message += `\n${fields.map((line) => `  - ${line}`).join("\n")}`;
+  if (fields.length > 0) common.fieldErrors = fields;
 
   // A provider can refuse a job the moment it is submitted: the API answers
   // with the job already failed. That is a failed job (refunded), not a bad request.

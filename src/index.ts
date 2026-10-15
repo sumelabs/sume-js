@@ -11,23 +11,30 @@
  */
 import {
   type ClientOptions,
+  type EstimateInput,
+  type Extra,
   GeneratedFile,
   type Input,
+  type InputOf,
   Job,
+  type ModelName,
   Result,
+  type RunInput,
   type RunOptions,
+  type SubmitInput,
   type SubmitOptions,
   Sume,
   type WaitOptions,
 } from "./client.js";
 import type { FileInput } from "./files.js";
-import type { JobInfo, Model, ModelKind, Price, Status } from "./types.js";
+import type { JobInfo, JobState, Model, ModelKind, Price, Status } from "./types.js";
 
 export {
   APIConnectionError,
   APIError,
   AuthenticationError,
   DEFAULT_BASE_URL,
+  type FieldError,
   InsufficientFundsError,
   InvalidRequestError,
   JobFailedError,
@@ -37,17 +44,24 @@ export {
   SumeError,
   WaitTimeoutError,
 } from "./errors.js";
+export type * from "./generated.js";
 export type { JobEvent, JobInfo, JobState, Model, ModelKind, Price, Status } from "./types.js";
 export { VERSION } from "./version.js";
 export { type VerifyOptions, verifyWebhook } from "./webhooks.js";
 export {
   type ClientOptions,
+  type EstimateInput,
+  type Extra,
   type FileInput,
   GeneratedFile,
   type Input,
+  type InputOf,
   Job,
+  type ModelName,
   Result,
+  type RunInput,
   type RunOptions,
+  type SubmitInput,
   type SubmitOptions,
   Sume,
   type WaitOptions,
@@ -60,24 +74,30 @@ const client = () => {
   return shared;
 };
 
-/** Submit, wait, and return the `Result`. See `Sume.run`. */
-export function run(model: string, prompt: string, input?: Input & RunOptions): Promise<Result>;
-export function run(model: string, input?: Input & RunOptions): Promise<Result>;
-export function run(model: string, a?: string | (Input & RunOptions), b?: Input & RunOptions): Promise<Result> {
+/**
+ * Submit, wait, and return the `Result`: the one call most code needs. See `Sume.run`.
+ *
+ * @example
+ * const image = await run("gpt-image-2", "a red kite over a beach", { quality: "low" });
+ * await image.save("kite.png");
+ */
+export function run<M extends ModelName>(model: M, prompt: string, input?: RunInput<M>): Promise<Result>;
+export function run<M extends ModelName>(model: M, input?: RunInput<M>): Promise<Result>;
+export function run(model: string, a?: string | RunInput, b?: RunInput): Promise<Result> {
   return typeof a === "string" ? client().run(model, a, b) : client().run(model, a);
 }
 
-/** Start a job and return at once. See `Sume.submit`. */
-export function submit(model: string, prompt: string, input?: Input & SubmitOptions): Promise<Job>;
-export function submit(model: string, input?: Input & SubmitOptions): Promise<Job>;
-export function submit(model: string, a?: string | (Input & SubmitOptions), b?: Input & SubmitOptions): Promise<Job> {
+/** Start a job and return at once; `job.wait()` gets its `Result` later. See `Sume.submit`. */
+export function submit<M extends ModelName>(model: M, prompt: string, input?: SubmitInput<M>): Promise<Job>;
+export function submit<M extends ModelName>(model: M, input?: SubmitInput<M>): Promise<Job>;
+export function submit(model: string, a?: string | SubmitInput, b?: SubmitInput): Promise<Job> {
   return typeof a === "string" ? client().submit(model, a, b) : client().submit(model, a);
 }
 
-/** What a request would cost, in dollars. Free, and needs no key. */
-export function estimate(model: string, prompt: string, input?: Input): Promise<Price>;
-export function estimate(model: string, input?: Input): Promise<Price>;
-export function estimate(model: string, a?: string | Input, b?: Input): Promise<Price> {
+/** What a request would cost, in dollars. Free, and needs no key. See `Sume.estimate`. */
+export function estimate<M extends ModelName>(model: M, prompt: string, input?: EstimateInput<M>): Promise<Price>;
+export function estimate<M extends ModelName>(model: M, input?: EstimateInput<M>): Promise<Price>;
+export function estimate(model: string, a?: string | EstimateInput, b?: EstimateInput): Promise<Price> {
   return typeof a === "string" ? client().estimate(model, a, b) : client().estimate(model, a);
 }
 
@@ -92,10 +112,10 @@ export const cancel = (id: string): Promise<boolean> => client().cancel(id);
 /** Every model in the open catalog, or one kind. Free, and needs no key. */
 export const models = (kind?: ModelKind): Promise<Model[]> => client().models(kind);
 /** One model: what it takes, its limits and its prices. */
-export const model = (id: string): Promise<Model> => client().model(id);
+export const model = (id: ModelName): Promise<Model> => client().model(id);
 /** Put a file in Sume storage and return its URL. */
 export const upload = (file: FileInput, options?: { contentType?: string; signal?: AbortSignal }): Promise<string> =>
   client().upload(file, options);
 /** Your newest jobs first. */
-export const listJobs = (options?: { limit?: number; status?: string }): Promise<JobInfo[]> =>
+export const listJobs = (options?: { limit?: number; status?: JobState }): Promise<JobInfo[]> =>
   client().listJobs(options);

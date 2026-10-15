@@ -38,7 +38,7 @@ jobs:
           test "$tag" = "$version" && test "$tag" = "$code" || { echo "::error::tag $tag, package.json $version, src/version.ts $code"; exit 1; }
           grep -q "## \[$tag\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no [$tag] section"; exit 1; }
       - run: npm ci
-      - run: npm run lint && npm run typecheck && npm test && npm run build
+      - run: npm run lint && npm run typecheck && npm test && npm run build && node scripts/check-readme.mjs
       - run: node scripts/smoke-package.mjs
       - name: Pack
         run: |

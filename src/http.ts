@@ -1,3 +1,4 @@
+import { debuglog } from "node:util";
 import { resolveApiKey, resolveBaseUrl } from "./config.js";
 import {
   APIConnectionError,
@@ -15,6 +16,9 @@ const RETRY_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_RETRY_DELAY_MS = 30_000;
 const TRANSFER_TIMEOUT_MS = 15 * 60_000;
 
+/** `NODE_DEBUG=sume` prints one line per API call: method, path, status, request id, attempt, time. Never the key. */
+export const debug = debuglog("sume");
+
 export interface TransportOptions {
   apiKey?: string | undefined;
   baseUrl?: string | undefined;
@@ -22,6 +26,7 @@ export interface TransportOptions {
   maxRetries?: number | undefined;
   fetch?: typeof globalThis.fetch | undefined;
   sleep?: ((ms: number, signal?: AbortSignal) => Promise<void>) | undefined;
+  headers?: Record<string, string> | undefined;
 }
 
 export interface RequestOptions {
@@ -80,6 +85,7 @@ export class Transport {
   readonly #timeoutMs: number;
   readonly #maxRetries: number;
   readonly #fetch: typeof globalThis.fetch;
+  readonly #headers: Record<string, string>;
   readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 
   constructor(options: TransportOptions = {}) {
@@ -89,6 +95,7 @@ export class Transport {
     this.#timeoutMs = options.timeoutMs ?? 60_000;
     this.#maxRetries = options.maxRetries ?? 3;
     this.#fetch = options.fetch ?? ((...args) => globalThis.fetch(...args));
+    this.#headers = Object.fromEntries(Object.entries(options.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
     this.sleep = options.sleep ?? sleep;
   }
 
@@ -110,7 +117,11 @@ export class Transport {
     for (const [name, value] of Object.entries(options.query ?? {})) {
       if (value !== undefined && value !== "") url.searchParams.set(name, String(value));
     }
-    const headers: Record<string, string> = { accept: "application/json", "user-agent": userAgent() };
+    const headers: Record<string, string> = {
+      accept: "application/json",
+      "user-agent": userAgent(),
+      ...this.#headers,
+    };
     if (key) headers.authorization = `Bearer ${key}`;
     if (options.idempotencyKey) headers["idempotency-key"] = options.idempotencyKey;
     let body: string | undefined;
@@ -121,6 +132,7 @@ export class Transport {
     const retry = options.retry ?? (method === "GET" || options.idempotencyKey !== undefined);
     const attempts = retry ? this.#maxRetries + 1 : 1;
     for (let attempt = 1; ; attempt++) {
+      const started = Date.now();
       let response: Response;
       try {
         response = await this.#fetch(url, {
@@ -146,6 +158,15 @@ export class Transport {
         });
       }
       const requestId = response.headers.get("x-sume-request-id") ?? undefined;
+      debug(
+        "%s %s -> %d (request %s, attempt %d, %d ms)",
+        method,
+        path,
+        response.status,
+        requestId ?? "-",
+        attempt,
+        Date.now() - started,
+      );
       const text = await response.text();
       let json: unknown;
       try {

@@ -8,7 +8,7 @@
   "files": {
     "includes": [
       "**",
-      "!src/generated",
+      "!src/generated.ts",
       "!dist",
       "!coverage",
       "!**/*.json",

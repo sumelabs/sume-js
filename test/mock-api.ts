@@ -28,6 +28,16 @@ export const MODELS: Json[] = [
     capabilities: { resolutions: ["480p", "720p"], duration_seconds: { min: 4, max: 15 } },
   },
   {
+    // A model newer than the client's generated list: its kind comes from the catalog.
+    id: "brand-new-video",
+    name: "Brand New Video",
+    kind: "video",
+    company: { slug: "new", name: "New" },
+    modes: ["text-to-video"],
+    pricing: { currency: "USD", unit: "second", from_usd: "0.0500", from_usd_micros: 50000 },
+    capabilities: { duration_seconds: { min: 2, max: 10 } },
+  },
+  {
     id: "veed-lipsync",
     name: "VEED Lipsync",
     kind: "lipsync",
@@ -47,6 +57,10 @@ export class MockApi {
   artifacts = "image";
   /** Status codes to answer the next API calls with, first in first out. */
   failNext: number[] = [];
+  /** Answer this many submits with 429 concurrency_limit_reached, as an account at its job limit. */
+  slotsBusy = 0;
+  /** Refuse submits with 400 and per-field errors. */
+  rejectFields = false;
   requests: { method: string; url: URL; headers: Headers; body: string }[] = [];
   jobs = new Map<string, Json>();
   byKey = new Map<string, string>();
@@ -147,6 +161,20 @@ export class MockApi {
   generate(path: string, headers: Headers, body: Json): Response {
     const m = MODELS.find((x) => x.id === body.model);
     if (!m) return this.error(404, "model_not_found", "No such model.");
+    if (this.slotsBusy > 0) {
+      this.slotsBusy--;
+      return this.error(429, "concurrency_limit_reached", "Too many jobs in flight.", { retryable: true });
+    }
+    if (this.rejectFields) {
+      return this.error(400, "invalid_request", "The request is invalid.", {
+        details: {
+          errors: [
+            { path: "duration", message: "must be between 4 and 15" },
+            { path: "", message: "bad" },
+          ],
+        },
+      });
+    }
     const router = m.kind === "image" ? "image" : "video";
     if (!path.includes(`/v1/${router}-router/`))
       return this.error(400, "invalid_request", `${m.id} is not a ${router} model.`);
@@ -170,6 +198,7 @@ export class MockApi {
       model: m.id,
       idempotency_key: key,
       created_at: "2026-10-15T00:00:00.000Z",
+      started_at: "2026-10-15T00:00:01.000Z",
       completed_at: null,
       input,
       result: null,
@@ -198,6 +227,7 @@ export class MockApi {
         job.error = { code: "provider_error", message: "The provider timed out." };
       } else {
         job.status = "completed";
+        job.completed_at = "2026-10-15T00:00:16.500Z";
         job.result = { artifacts: this.makeArtifacts(id) };
       }
     }

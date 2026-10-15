@@ -11,6 +11,13 @@ const UNITS: Record<string, string> = { second: "/s", image: "/image", request: 
 // biome-ignore lint/suspicious/noExplicitAny: API JSON is read by field name, defensively.
 type Json = Record<string, any>;
 
+/** Attach the API's JSON (and a `toString`) without printing them: `console.log` shows the fields only. */
+function hidden<T extends object>(value: T, raw: Json, describe?: () => string): T {
+  Object.defineProperty(value, "raw", { value: raw, enumerable: false });
+  if (describe) Object.defineProperty(value, "toString", { value: describe, enumerable: false });
+  return value;
+}
+
 /** `text-to-video, image-to-video` → `["text", "image"]`: what a model starts from. */
 function inputsOf(modes: readonly string[]): string[] {
   const words: string[] = [];
@@ -52,7 +59,7 @@ export function modelFromApi(data: Json): Model {
   const to = pricing.to_usd && pricing.to_usd !== pricing.from_usd ? String(pricing.to_usd) : null;
   const per = pricing.unit ?? "request";
   const modes: string[] = Array.isArray(data.modes) ? data.modes : [];
-  return {
+  const model = {
     id: data.id,
     name: data.name ?? data.id,
     kind: data.kind ?? "image",
@@ -65,8 +72,8 @@ export function modelFromApi(data: Json): Model {
     modes,
     resolutions: Array.isArray(caps.resolutions) ? caps.resolutions : [],
     seconds: typeof span?.min === "number" && typeof span?.max === "number" ? [span.min, span.max] : null,
-    raw: data,
   };
+  return hidden(model, data) as Model;
 }
 
 /** What a request costs, in US dollars. Pricing is free and needs no key. */
@@ -81,13 +88,11 @@ export interface Price {
 
 export function priceFromApi(data: Json): Price {
   const usd = String(data.usd);
-  return {
-    model: data.model ?? "",
-    usd,
-    usdMicros: Number(data.usd_micros ?? 0),
-    raw: data,
-    toString: () => `$${usd}`,
-  };
+  return hidden(
+    { model: data.model ?? "", usd, usdMicros: Number(data.usd_micros ?? 0) },
+    data,
+    () => `$${usd}`,
+  ) as Price;
 }
 
 /** One read of a job's state. */
@@ -109,16 +114,17 @@ export function statusFromApi(data: Json): Status {
   if (state === "in_queue") state = "queued";
   if (state === "in_progress") state = "processing";
   const queuePosition = typeof data.queue_position === "number" ? data.queue_position : null;
-  return {
+  const status = {
     jobId: data.job_id ?? data.job?.id ?? "",
     state: state as JobState,
     done: Boolean(data.terminal) || TERMINAL.has(state),
     ok: state === "completed",
     queuePosition,
     nextPollAfterSeconds: typeof data.next_poll_after_seconds === "number" ? data.next_poll_after_seconds : null,
-    raw: data,
-    toString: () => (state === "queued" && queuePosition !== null ? `queued (#${queuePosition} in line)` : state),
   };
+  return hidden(status, data, () =>
+    state === "queued" && queuePosition !== null ? `queued (#${queuePosition} in line)` : state,
+  ) as Status;
 }
 
 /** A step in a job's life, like `job.started` or `job.failed`. */
@@ -131,13 +137,13 @@ export interface JobEvent {
 }
 
 export function eventFromApi(data: Json): JobEvent {
-  return {
+  const event = {
     id: data.id ?? "",
     type: data.type ?? "",
     message: data.message ?? null,
     createdAt: data.created_at ?? "",
-    raw: data,
   };
+  return hidden(event, data) as JobEvent;
 }
 
 /** A job as `GET /v1/jobs/{id}` describes it. */
@@ -146,7 +152,10 @@ export interface JobInfo {
   model: string | null;
   state: JobState;
   createdAt: string;
+  startedAt: string | null;
   completedAt: string | null;
+  /** How long it ran, from start (or creation) to completion, once it has completed. */
+  seconds: number | null;
   error: Json | null;
   input: Json;
   idempotencyKey: string | null;
@@ -155,22 +164,30 @@ export interface JobInfo {
   raw: Json;
 }
 
+function secondsBetween(start: unknown, end: unknown): number | null {
+  if (typeof start !== "string" || typeof end !== "string") return null;
+  const ms = Date.parse(end) - Date.parse(start);
+  return Number.isFinite(ms) ? ms / 1000 : null;
+}
+
 export function jobInfoFromApi(data: Json): JobInfo {
   const artifacts: Json[] = data.result?.artifacts ?? [];
-  return {
+  const info = {
     id: data.id,
     model: data.model ?? null,
     state: data.status,
     createdAt: data.created_at ?? "",
+    startedAt: data.started_at ?? null,
     completedAt: data.completed_at ?? null,
+    seconds: secondsBetween(data.started_at ?? data.created_at, data.completed_at),
     error: data.error ?? null,
     input: data.input ?? {},
     idempotencyKey: data.idempotency_key ?? null,
     urls: finalFiles(artifacts)
       .map((a) => a.url)
       .filter(Boolean),
-    raw: data,
   };
+  return hidden(info, data) as JobInfo;
 }
 
 /** The files a person asked for: no intermediate stages, and no poster image beside a video. */

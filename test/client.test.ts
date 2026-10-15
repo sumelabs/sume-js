@@ -89,9 +89,12 @@ describe("run", () => {
     const sume = make();
     await sume.run("seedance-2-mini", "slow push in", { image: PNG, duration: 4 });
     expect(api.bodies("/v1/video-router/generate")[0]?.image_url).toMatch(/^https:\/\/media\.test\/assets\//u);
+    // The types refuse these too; the checks below are for plain JavaScript.
+    // @ts-expect-error a video model takes one image, the first frame
     await expect(sume.run("seedance-2-mini", "x", { image: [PNG, PNG], duration: 4 })).rejects.toThrow(
       "takes one image",
     );
+    // @ts-expect-error video is a video model's input
     await expect(sume.run("gpt-image-2", "x", { video: "https://example.com/a.mp4" })).rejects.toThrow(
       "video applies to video models",
     );
@@ -227,7 +230,7 @@ describe("models, prices, uploads", () => {
   it("lists models and prices with no key", async () => {
     const anonymous = make({});
     const videos = await anonymous.models("video");
-    expect(videos.map((m) => m.id)).toEqual(["seedance-2-mini"]);
+    expect(videos.map((m) => m.id)).toEqual(["seedance-2-mini", "brand-new-video"]);
     expect(videos[0]?.price).toBe("$0.0879–$0.1890/s");
     expect(videos[0]?.seconds).toEqual([4, 15]);
     expect(String(await anonymous.estimate("seedance-2-mini", "a boat", { duration: 6 }))).toBe("$0.5274");
