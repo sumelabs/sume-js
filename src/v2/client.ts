@@ -60,6 +60,7 @@ interface ClientState {
   config?: Config;
   client?: AxiosInstance;
   credentials?: Credentials;
+  routes?: Map<string, string>;
 }
 
 type JobPayload = Record<string, any>;
@@ -73,6 +74,15 @@ const TERMINAL_STATUSES: ReadonlySet<V2RequestStatus> = new Set([
 ]);
 
 const IDEMPOTENCY_KEY = /^[\x20-\x7E]{1,255}$/;
+
+const MODEL_ID = /^[A-Za-z0-9][\w.-]*$/;
+
+const ROUTER_BY_KIND: Record<string, string> = {
+  image: '/v1/image-router/generate',
+  video: '/v1/video-router/generate',
+  lipsync: '/v1/video-router/generate',
+  captions: '/v1/video-router/generate',
+};
 
 function checkBrowserEnvironment(): void {
   const isBrowser = typeof (globalThis as any).window !== 'undefined';
@@ -156,6 +166,7 @@ function initializeClient(config?: V2ClientConfig): {
   config: Config;
   client: AxiosInstance;
   credentials: Credentials;
+  routes: Map<string, string>;
 } {
   checkBrowserEnvironment();
 
@@ -195,7 +206,7 @@ function initializeClient(config?: V2ClientConfig): {
   });
   axiosClient.interceptors.response.use((response) => response, mapAPIError);
 
-  return { config: cfg, client: axiosClient, credentials: creds };
+  return { config: cfg, client: axiosClient, credentials: creds, routes: new Map() };
 }
 
 function retryConfig(config: Config): RetryConfig {
@@ -265,8 +276,10 @@ function toV2Response(
   error?: JobError | null
 ): V2Response {
   const requestId = requestIdOf(payload);
+  const status = statusOf(payload);
   const response: V2Response = {
-    status: statusOf(payload),
+    status:
+      status === 'failed' && error?.public_reason === 'content_policy_rejected' ? 'nsfw' : status,
     request_id: requestId,
     status_url: payload.status_url ?? jobUrl(config, requestId, '/status'),
     cancel_url: payload.cancel_url ?? null,
@@ -358,6 +371,38 @@ async function finishRequest(
   return toV2Response(config, payload, undefined, error);
 }
 
+async function resolveEndpoint(
+  state: ClientState,
+  endpoint: string
+): Promise<{ path: string; model?: string }> {
+  if (endpoint.includes('/')) {
+    return { path: endpoint.startsWith('/') ? endpoint : `/${endpoint}` };
+  }
+  if (!MODEL_ID.test(endpoint)) {
+    throw new BadInputError(
+      'Endpoint must be a model id, such as "gpt-image-2", or a path, such as "/v1/image-router/generate"'
+    );
+  }
+  const cached = state.routes?.get(endpoint);
+  if (cached) {
+    return { path: cached, model: endpoint };
+  }
+  const response = await retryWithBackoff(
+    () => state.client!.get(`/v1/open/catalog/${encodeURIComponent(endpoint)}`),
+    retryConfig(state.config!)
+  );
+  const kind = unwrap(response.data)?.kind;
+  const path = typeof kind === 'string' ? ROUTER_BY_KIND[kind] : undefined;
+  if (!path) {
+    throw new BadInputError(
+      `Model "${endpoint}" is of kind "${String(kind)}", which this SDK cannot route. ` +
+        `Call subscribe('/v1/<router>/generate', { input: { model: '${endpoint}', ... } }).`
+    );
+  }
+  (state.routes ??= new Map()).set(endpoint, path);
+  return { path, model: endpoint };
+}
+
 function toBuffer(data: Buffer | Uint8Array): Buffer {
   if (Buffer.isBuffer(data)) {
     return data;
@@ -391,6 +436,9 @@ export function createSumeClient(config?: V2ClientConfig): SumeClient {
       throw new BadInputError('Content type must be a MIME type, such as "image/png"');
     }
     const bytes = toBuffer(data);
+    if (bytes.byteLength === 0) {
+      throw new BadInputError('Upload data is empty');
+    }
 
     const linkResponse = await retryWithBackoff(
       () =>
@@ -430,15 +478,19 @@ export function createSumeClient(config?: V2ClientConfig): SumeClient {
       const client = state.client!;
       const clientConfig = state.config!;
 
-      if (typeof endpoint !== 'string' || !endpoint.includes('/')) {
+      if (typeof endpoint !== 'string' || endpoint.trim() === '') {
         throw new BadInputError(
-          `"${endpoint}" is not an endpoint. Send the model in the input instead: ` +
-            `subscribe('/v1/image-router/generate', { input: { model: '${endpoint}', ... } }), ` +
-            `or '/v1/video-router/generate' for video.`
+          'Endpoint must be a model id, such as "gpt-image-2", or a path, such as "/v1/image-router/generate"'
         );
       }
       if (!options || typeof options.input !== 'object' || options.input === null) {
         throw new BadInputError('options.input must be an object');
+      }
+      const inputModel = (options.input as Record<string, unknown>).model;
+      if (!endpoint.includes('/') && inputModel !== undefined && inputModel !== endpoint) {
+        throw new BadInputError(
+          `input.model "${String(inputModel)}" does not match the endpoint model "${endpoint}"`
+        );
       }
 
       const { input, webhook, withPolling = true } = options;
@@ -447,9 +499,9 @@ export function createSumeClient(config?: V2ClientConfig): SumeClient {
         throw new BadInputError('idempotencyKey must be 1 to 255 printable ASCII characters');
       }
 
-      const formattedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+      const { path, model } = await resolveEndpoint(state, endpoint);
 
-      const requestBody: Record<string, unknown> = { ...input };
+      const requestBody: Record<string, unknown> = model ? { ...input, model } : { ...input };
       if (webhook) {
         requestBody.mode = 'webhook';
         requestBody.webhook_url = webhook.url;
@@ -457,7 +509,7 @@ export function createSumeClient(config?: V2ClientConfig): SumeClient {
 
       const response = await retryWithBackoff(
         () =>
-          client.post(formattedEndpoint, requestBody, {
+          client.post(path, requestBody, {
             headers: { 'Idempotency-Key': idempotencyKey },
           }),
         retryConfig(clientConfig)
@@ -499,4 +551,5 @@ export function reset(): void {
   globalState.config = undefined;
   globalState.client = undefined;
   globalState.credentials = undefined;
+  globalState.routes = undefined;
 }

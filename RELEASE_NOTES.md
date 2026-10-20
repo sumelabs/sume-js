@@ -8,7 +8,8 @@ The package is now `@sume-com/client`. It replaces `@sume-com/open` 0.2.0, which
 
 ## ✨ New Features
 
-- **`subscribe(endpoint, { input, webhook, withPolling })`**: submits to `/v1/image-router/generate` or `/v1/video-router/generate`, polls `/v1/jobs/{id}/status`, reads `/v1/jobs/{id}/result` and returns a `V2Response` with `images`, `video` and `artifacts`
+- **`subscribe(endpoint, { input, webhook, withPolling })`**: the endpoint is a model id (routed once through the public catalog) or a router path; it submits to `/v1/image-router/generate` or `/v1/video-router/generate`, polls `/v1/jobs/{id}/status`, reads `/v1/jobs/{id}/result` and returns a `V2Response` with `images`, `video` and `artifacts`
+- **Higgsfield's statuses**: `queued`, `in_progress`, `completed`, `failed`, `nsfw` (a content-policy refusal), plus `canceled`
 - **Single `credentials` field**: one Sume API key, sent as `Authorization: Bearer <key>`; or `apiKey`; or `SUME_API_KEY`
 - **`config()`, the `sume` singleton and `createSumeClient()`**, with isolated instance credentials
 - **`upload(data, contentType)` and `uploadImage(buffer, format)`** through `/v1/files/generate-upload-url`
@@ -21,7 +22,7 @@ The package is now `@sume-com/client`. It replaces `@sume-com/open` 0.2.0, which
 
 - **Package name**: `@sume-com/open` → `@sume-com/client`
 - **One call instead of many**: `run()`, `submit()`, `result()`, `status()`, `cancel()`, `job()`, `models()`, `model()`, `estimate()`, `listJobs()` and the `Result` / `Job` / `GeneratedFile` classes are gone. Use `subscribe()`; for prices and models, read the [open model catalog](https://open.sume.com/docs/reference/catalog/list)
-- **The model goes in the input**: `run('gpt-image-2', 'a red kite')` → `subscribe('/v1/image-router/generate', { input: { model: 'gpt-image-2', prompt: 'a red kite' } })`
+- **The prompt goes in the input**: `run('gpt-image-2', 'a red kite')` → `subscribe('gpt-image-2', { input: { prompt: 'a red kite' } })`
 - **No downloads**: `result.save()` is gone; the response has the artifact URLs
 - **No local paths in inputs**: upload files first with `upload()` / `uploadImage()`
 - **Per-model generated types** are replaced by one input type per endpoint
@@ -43,8 +44,8 @@ import { sume, config } from '@sume-com/client/v2';
 
 config({ credentials: process.env.SUME_API_KEY });
 
-const response = await sume.subscribe('/v1/image-router/generate', {
-  input: { model: 'gpt-image-2', prompt: 'a red kite over a beach', quality: 'low' },
+const response = await sume.subscribe('gpt-image-2', {
+  input: { prompt: 'a red kite over a beach', quality: 'low' },
   withPolling: true
 });
 

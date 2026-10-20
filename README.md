@@ -21,7 +21,7 @@ The client is exported from `@sume-com/client/v2`, the same path as Higgsfield's
 - `Authorization: Bearer <key>` authentication header
 - `User-Agent: sume-server-js/<version>` header
 - Server-side only (browser usage blocked for security)
-- Simplified API with `subscribe()` method
+- Simplified API with `subscribe()` method: name a model, or a router path
 - Automatic polling via `/v1/jobs/{id}/status`, then the result from `/v1/jobs/{id}/result`
 - Safe retries: every submit carries an `Idempotency-Key`, so a retried submit never makes a second, billed job
 
@@ -36,9 +36,8 @@ config({
 });
 
 // Generate content
-const response = await sume.subscribe('/v1/image-router/generate', {
+const response = await sume.subscribe('gpt-image-2', {
   input: {
-    model: 'gpt-image-2',
     prompt: 'A ceramic coffee cup on a wooden table, soft morning light',
     quality: 'low',
     aspect_ratio: '1:1'
@@ -102,9 +101,8 @@ Explicit client instances keep their credentials separate. `client.configure()` 
 Submit a job and wait for its result:
 
 ```typescript
-const response = await sume.subscribe('/v1/video-router/generate', {
+const response = await sume.subscribe('seedance-2.5', {
   input: {
-    model: 'seedance-2.5',
     prompt: 'Steam rises from the cup as the camera slowly pushes in',
     duration: 5,
     resolution: '480p',
@@ -118,8 +116,8 @@ const response = await sume.subscribe('/v1/video-router/generate', {
 ```
 
 **Parameters:**
-- `endpoint` (string): The API endpoint: `'/v1/image-router/generate'` for images, `'/v1/video-router/generate'` for video, lip-sync and captions
-- `options.input` (object): The request body: `model` and that model's fields (`prompt`, `aspect_ratio`, `duration`, `image_url` and so on)
+- `endpoint` (string): A model id from the [open model catalog](https://open.sume.com/docs/reference/catalog/list) (e.g., `'gpt-image-2'`), or an API path with `model` in the input: `'/v1/image-router/generate'` for images, `'/v1/video-router/generate'` for video, lip-sync and captions
+- `options.input` (object): Input parameters for the model (`prompt`, `aspect_ratio`, `duration`, `image_url` and so on)
 - `options.withPolling` (boolean, default: `true`): Automatically poll for job completion
 - `options.webhook` (object, optional): Webhook configuration
   - `url` (string): Public HTTPS URL that Sume calls when the job ends
@@ -127,7 +125,7 @@ const response = await sume.subscribe('/v1/video-router/generate', {
 
 **Note:** When a webhook is provided, the SDK sends `mode: "webhook"` and `webhook_url` in the request body.
 
-The model goes in the input, not in the endpoint. Each model's fields and accepted values are in its catalog row: [image models](https://open.sume.com/docs/reference/images/list-models), [video models](https://open.sume.com/docs/reference/video/list-models).
+Sume runs every model behind two routers. For a model id, the SDK reads the model's `kind` once from the public catalog (`GET /v1/open/catalog/{id}`), then submits to the image router (`image`) or the video router (`video`, `lipsync`, `captions`) with `model` in the body. An unknown id fails there, before any job. Each model's fields and accepted values are in its catalog row: [image models](https://open.sume.com/docs/reference/images/list-models), [video models](https://open.sume.com/docs/reference/video/list-models).
 
 #### `upload(data, contentType)`
 
@@ -160,9 +158,8 @@ config({
   credentials: 'YOUR_SUME_API_KEY'
 });
 
-const response = await sume.subscribe('/v1/image-router/generate', {
+const response = await sume.subscribe('nano-banana-pro', {
   input: {
-    model: 'nano-banana-pro',
     prompt: 'A majestic mountain landscape at sunset',
     aspect_ratio: '16:9'
   },
@@ -177,9 +174,8 @@ if (response.status === 'completed') {
 #### Image Editing
 
 ```typescript
-const response = await sume.subscribe('/v1/image-router/generate', {
+const response = await sume.subscribe('gpt-image-2', {
   input: {
-    model: 'gpt-image-2',
     prompt: 'Make the cup cobalt blue, keep everything else the same',
     quality: 'low',
     image_urls: ['https://example.com/cup.png']
@@ -213,9 +209,8 @@ if (response.status === 'completed') {
 #### Lip-sync
 
 ```typescript
-const response = await sume.subscribe('/v1/video-router/generate', {
+const response = await sume.subscribe('veed-fabric-1.0', {
   input: {
-    model: 'veed-fabric-1.0',
     image_url: await sume.uploadImage(await readFile('face.jpg')),
     audio_url: await sume.upload(await readFile('speech.wav'), 'audio/wav'),
     duration: 8,
@@ -232,6 +227,7 @@ The client automatically polls `/v1/jobs/{id}/status` when `withPolling` is `tru
 - `queued` – Request accepted and waiting for a worker
 - `in_progress` – Generation currently running
 - `completed` – Generation finished and media URLs are returned
+- `nsfw` – Content refused by the model's or Sume's content policy (`error.public_reason` is `content_policy_rejected`); the price is refunded
 - `failed` – Generation errored; the price is refunded and `error` says why
 - `canceled` – Canceled before generation started; the price is refunded
 
@@ -276,13 +272,13 @@ The SDK turns it, and the result's artifacts, into one `V2Response`:
 }
 ```
 
-`images` holds every image artifact and `video` the first video artifact, as in the Higgsfield client. `artifacts` keeps every artifact as Sume returns it, audio included. A failed job resolves with `status: 'failed'` and `error` (`code`, `message`), not an exception. Artifacts live on `media.sume.com` and are readable by anyone with the link; copy them to your own storage if you need to control access.
+`images` holds every image artifact and `video` the first video artifact, as in the Higgsfield client. `artifacts` keeps every artifact as Sume returns it, audio included. A failed job resolves with `status: 'failed'` (or `'nsfw'`) and `error` (`code`, `message`, `public_reason`), not an exception. Artifacts live on `media.sume.com` and are readable by anyone with the link; copy them to your own storage if you need to control access.
 
 ### Working with the Response
 
 ```typescript
-const response = await sume.subscribe('/v1/image-router/generate', {
-  input: { model: 'gpt-image-2', prompt: 'Test', quality: 'low', num_images: 2 },
+const response = await sume.subscribe('gpt-image-2', {
+  input: { prompt: 'Test', quality: 'low', num_images: 2 },
   withPolling: true
 });
 
@@ -294,7 +290,7 @@ console.log('Status:', response.status);
 for (const image of response.images ?? []) {
   console.log('Result URL:', image.url);
 }
-if (response.status === 'failed') {
+if (response.status === 'failed' || response.status === 'nsfw') {
   console.error(response.error?.code, response.error?.message);
 }
 ```
@@ -306,13 +302,13 @@ if (response.status === 'failed') {
 ```typescript
 import { TimeoutError } from '@sume-com/client/v2';
 
-const input = { model: 'seedance-2.5', prompt: 'A paper boat drifting down a rain gutter', duration: 10 };
+const input = { prompt: 'A paper boat drifting down a rain gutter', duration: 10 };
 
 try {
-  await sume.subscribe('/v1/video-router/generate', { input });
+  await sume.subscribe('seedance-2.5', { input });
 } catch (error) {
   if (error instanceof TimeoutError) {
-    const response = await sume.subscribe('/v1/video-router/generate', {
+    const response = await sume.subscribe('seedance-2.5', {
       input,
       idempotencyKey: error.idempotencyKey
     });
@@ -326,8 +322,8 @@ The same works across processes: pass your own `idempotencyKey`, store it, and s
 ### Webhooks
 
 ```typescript
-await sume.subscribe('/v1/video-router/generate', {
-  input: { model: 'kling-3', prompt: 'A slow dolly shot through a neon market at night', duration: 5 },
+await sume.subscribe('kling-3', {
+  input: { prompt: 'A slow dolly shot through a neon market at night', duration: 5 },
   webhook: { url: 'https://example.com/hooks/sume' },
   withPolling: false
 });
@@ -403,7 +399,7 @@ const response: V2Response = await client.subscribe('/v1/image-router/generate',
 });
 ```
 
-The two endpoints type their input (`ImageGenerateInput`, `VideoGenerateInput`): `model` is required, the documented fields are checked, and model-specific fields pass through.
+The two router paths type their input (`ImageGenerateInput`, `VideoGenerateInput`): `model` is required, the documented fields are checked, and model-specific fields pass through. A model id takes any input object.
 
 ---
 
@@ -423,8 +419,8 @@ import {
 } from '@sume-com/client';
 
 try {
-  const response = await sume.subscribe('/v1/image-router/generate', {
-    input: { model: 'gpt-image-2', prompt: 'Test' }
+  const response = await sume.subscribe('gpt-image-2', {
+    input: { prompt: 'Test' }
   });
 } catch (error) {
   if (error instanceof AuthenticationError) {
@@ -453,7 +449,7 @@ try {
 | `NotEnoughCreditsError` | `402` | `insufficient_funds`; `responseData.error.details` has `required_usd` and `available_usd` |
 | `BadInputError` | `400` | `invalid_request` (`details` lists each field and why), `concurrency_limit_reached`, `bad_request` |
 | `ValidationError` | `422` | |
-| `APIError` | any other status | `open_key_route_not_allowed` (`403`), `not_found` (`404`), `idempotency_conflict` (`409`), `rate_limited` (`429`), `database_busy` (`503`), `internal_error` (`500`) |
+| `APIError` | any other status | `open_key_route_not_allowed` (`403`), `not_found` and `model_not_found` (`404`), `idempotency_conflict` (`409`), `rate_limited` (`429`), `database_busy` (`503`), `internal_error` (`500`) |
 | `TimeoutError` | `maxPollTime` ran out; the job keeps running | |
 | `CredentialsMissedError` | no key in config or `SUME_API_KEY` | |
 | `BrowserNotSupportedError` | the SDK was loaded in a browser | |
@@ -471,6 +467,9 @@ switch (response.status) {
     break;
   case 'failed':
     console.error('Generation failed:', response.error?.message);
+    break;
+  case 'nsfw':
+    console.warn('Content flagged as NSFW');
     break;
   case 'canceled':
     console.warn('Job was canceled');
@@ -521,10 +520,10 @@ switch (response.status) {
 | `HF_CREDENTIALS`, `HF_KEY`, `HF_API_KEY` + `HF_API_SECRET` | `SUME_API_KEY` |
 | `Authorization: Key KEY_ID:KEY_SECRET` | `Authorization: Bearer sume_live_...` |
 | `https://api.higgsfield.ai` | `https://api.open.sume.com` |
-| `subscribe('flux-pro/kontext/max/text-to-image', { input })` | `subscribe('/v1/image-router/generate', { input: { model: 'flux-kontext-max', ... } })` |
+| `subscribe('flux-pro/kontext/max/text-to-image', { input })` | `subscribe('flux-kontext-max', { input })`, routed by the catalog's `kind`; or `subscribe('/v1/image-router/generate', { input: { model: 'flux-kontext-max', ... } })` |
 | polls `/requests/{request_id}/status` | polls `/v1/jobs/{id}/status`, then reads `/v1/jobs/{id}/result` |
 | `webhook: { url, secret }` becomes `?hf_webhook=<url>` | `webhook: { url }` becomes `mode: "webhook"` and `webhook_url`; check deliveries with `verifyWebhook()` |
-| statuses `queued`, `in_progress`, `completed`, `failed`, `nsfw` | `queued`, `in_progress`, `completed`, `failed`, `canceled` |
+| statuses `queued`, `in_progress`, `completed`, `failed`, `nsfw` | the same, plus `canceled`; `nsfw` is a refusal with `public_reason: content_policy_rejected` |
 | `NotEnoughCreditsError` on `403` | `NotEnoughCreditsError` on `402` |
 | retried submits have no idempotency key | every submit sends `Idempotency-Key`; retries and `TimeoutError` resume the same job |
 | `uploadImage()` on the deprecated v1 client | `upload()` and `uploadImage()` on the client |

@@ -40,7 +40,8 @@ export interface EndpointInputMap {
 
 export type EndpointInput<TEndpoint extends keyof EndpointInputMap> = EndpointInputMap[TEndpoint];
 
-export type V2RequestStatus = 'queued' | 'in_progress' | 'completed' | 'failed' | 'canceled';
+export type V2RequestStatus =
+  'queued' | 'in_progress' | 'completed' | 'failed' | 'nsfw' | 'canceled';
 
 export interface V2Image {
   url: string;

@@ -207,13 +207,76 @@ describe('subscribe', () => {
     expect(requests[0].path).toBe(IMAGE);
   });
 
-  it('refuses a bare model id as the endpoint, before any request', async () => {
-    const { requests } = mockSumeApi({});
+  it('routes a model id through the public catalog, once per model', async () => {
+    const { requests } = mockSumeApi({
+      'GET /v1/open/catalog/gpt-image-2': {
+        status: 200,
+        data: { data: { id: 'gpt-image-2', kind: 'image' } },
+      },
+      'GET /v1/open/catalog/veed-fabric-1.0': {
+        status: 200,
+        data: { data: { id: 'veed-fabric-1.0', kind: 'lipsync' } },
+      },
+      [`POST ${IMAGE}`]: { status: 202, data: submitted() },
+      [`POST ${VIDEO}`]: { status: 202, data: submitted() },
+    });
     const client = createSumeClient({ credentials: KEY });
-    await expect(client.subscribe('gpt-image-2', { input: { prompt: 'p' } })).rejects.toThrow(
-      /Send the model in the input instead/
+    const image = { input: { prompt: 'a red kite', quality: 'low' }, withPolling: false };
+    await client.subscribe('gpt-image-2', image);
+    await client.subscribe('gpt-image-2', image);
+    await client.subscribe('veed-fabric-1.0', {
+      input: { image_url: 'https://example.com/face.png', audio_url: 'https://example.com/a.wav' },
+      withPolling: false,
+    });
+
+    expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'GET /v1/open/catalog/gpt-image-2',
+      `POST ${IMAGE}`,
+      `POST ${IMAGE}`,
+      'GET /v1/open/catalog/veed-fabric-1.0',
+      `POST ${VIDEO}`,
+    ]);
+    expect(requests[1].body).toEqual({
+      prompt: 'a red kite',
+      quality: 'low',
+      model: 'gpt-image-2',
+    });
+    expect(requests[4].body.model).toBe('veed-fabric-1.0');
+  });
+
+  it('refuses an unknown model before any submit', async () => {
+    const { requests } = mockSumeApi({
+      'GET /v1/open/catalog/no-such-model': {
+        status: 404,
+        data: errorBody('model_not_found', 'Model no-such-model is not on open.sume.com.'),
+      },
+    });
+    const client = createSumeClient({ credentials: KEY });
+    await expect(
+      client.subscribe('no-such-model', { input: { prompt: 'p' } })
+    ).rejects.toMatchObject({ name: 'APIError', statusCode: 404, code: 'model_not_found' });
+    expect(requests).toHaveLength(1);
+  });
+
+  it('refuses a model kind it cannot route, and a conflicting input.model', async () => {
+    const { requests } = mockSumeApi({
+      'GET /v1/open/catalog/some-voice': {
+        status: 200,
+        data: { data: { id: 'some-voice', kind: 'speech' } },
+      },
+    });
+    const client = createSumeClient({ credentials: KEY });
+    await expect(client.subscribe('some-voice', { input: { prompt: 'p' } })).rejects.toThrow(
+      /kind "speech"/
     );
-    expect(requests).toHaveLength(0);
+    await expect(
+      client.subscribe('gpt-image-2', { input: { model: 'nano-banana-pro', prompt: 'p' } })
+    ).rejects.toThrow(BadInputError);
+    await expect(client.subscribe('not a model', { input: { prompt: 'p' } })).rejects.toThrow(
+      BadInputError
+    );
+    await expect(client.subscribe('', { input: { prompt: 'p' } })).rejects.toThrow(BadInputError);
+    expect(requests.map((r) => r.path)).toEqual(['/v1/open/catalog/some-voice']);
   });
 
   it('returns the queued job at once with withPolling: false', async () => {
@@ -336,6 +399,28 @@ describe('subscribe', () => {
     expect(response.error).toEqual(jobError);
     expect(response.images).toBeUndefined();
     expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual([`POST ${IMAGE}`, STATUS]);
+  });
+
+  it('reports a content-policy refusal as nsfw, as Higgsfield does', async () => {
+    const jobError = {
+      code: 'provider_execution_failed',
+      message: 'The provider refused the content.',
+      public_reason: 'content_policy_rejected',
+      next_action: 'fix_input',
+    };
+    mockSumeApi({
+      [`POST ${IMAGE}`]: { status: 202, data: submitted() },
+      [STATUS]: {
+        status: 200,
+        data: statusBody('failed', { job: { id: JOB_ID, status: 'failed', error: jobError } }),
+      },
+    });
+    const client = createSumeClient({ credentials: KEY });
+    const response = await settle(
+      client.subscribe(IMAGE, { input: { model: 'gpt-image-2', prompt: 'p' } })
+    );
+    expect(response.status).toBe('nsfw');
+    expect(response.error).toEqual(jobError);
   });
 
   it('reads the job for the error when the status has none', async () => {
@@ -786,6 +871,9 @@ describe('upload', () => {
       BadInputError
     );
     await expect(client.upload(Buffer.from('x'), '')).rejects.toThrow(BadInputError);
+    await expect(client.upload(Buffer.alloc(0), 'image/png')).rejects.toThrow(
+      'Upload data is empty'
+    );
   });
 });
 

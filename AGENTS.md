@@ -7,15 +7,15 @@ import { sume, config } from '@sume-com/client/v2';
 
 config({ credentials: process.env.SUME_API_KEY });
 
-const response = await sume.subscribe('/v1/image-router/generate', {
-  input: { model: 'gpt-image-2', prompt: 'a red kite over a beach', quality: 'low' },
+const response = await sume.subscribe('gpt-image-2', {
+  input: { prompt: 'a red kite over a beach', quality: 'low' },
 });
 console.log(response.status, response.images?.[0].url);
 ```
 
 - Server-side only. The key is `SUME_API_KEY`; a person makes it at https://open.sume.com/api-keys. Never print it.
 - Host: `https://api.open.sume.com`. Never `https://api.sume.com`, which is sume.com's API.
-- The model goes in `input.model`. Images go to `/v1/image-router/generate`; video, lip-sync and captions to `/v1/video-router/generate`.
+- The endpoint is a model id, routed by its catalog `kind`, or a router path with `input.model`: images go to `/v1/image-router/generate`; video, lip-sync and captions to `/v1/video-router/generate`.
 - After a `TimeoutError` the job keeps running. Call `subscribe()` again with `error.idempotencyKey`; never submit a new job for it.
 - The README is the reference. Sume's API docs: https://open.sume.com/docs.
 
