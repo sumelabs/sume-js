@@ -12,7 +12,8 @@
     "./v2": {
       "types": "./dist/v2/index.d.ts",
       "default": "./dist/v2/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "typesVersions": {
     "*": {
