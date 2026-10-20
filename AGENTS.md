@@ -1,35 +1,35 @@
 # AGENTS.md
 
-## Using `@sume-com/open` in your code
+## Using `@sume-com/client`
 
 ```ts
-import { run } from "@sume-com/open";   // npm install https://github.com/sumelabs/sume-js/releases/latest/download/sume-open.tgz
+import { sume, config } from '@sume-com/client/v2';
 
-const image = await run("gpt-image-2", "a red kite over a beach", { quality: "low" });   // waits, resolves to a Result
-const paths = await image.save("out/");                                                  // downloads; resolves to the paths
+config({ credentials: process.env.SUME_API_KEY });
+
+const response = await sume.subscribe('/v1/image-router/generate', {
+  input: { model: 'gpt-image-2', prompt: 'a red kite over a beach', quality: 'low' },
+});
+console.log(response.status, response.images?.[0].url);
 ```
 
-- Server-side only: a browser bundle gets a stub that throws.
-- Key: `SUME_API_KEY` in the environment or `./.env`. A person makes it at https://open.sume.com/api-keys. Never print it.
-- Host: `https://api.open.sume.com` by default. Never `https://api.sume.com`, which is sume.com's API.
-- Name the model yourself; prices differ by more than 100×. `await models("video")` lists models with `m.price` (per image or per second). `estimate(...)` is free.
-- Pass `maxUsd` to cap a run. Local files work wherever a URL does (`{ image: "photo.png" }`).
-- Long jobs: `const job = await submit(...)`, then later `await result(job.id)`. After `WaitTimeoutError` the job keeps running. Never resubmit; a second submit is a second charge.
-- Progress: `onSubmit`, `onStatus`, `onEvent`. To give up on a queued job and get refunded: `cancelOnTimeout: true`.
-- Each model id picks that model's input type, so tsc catches a misspelled field. A field the types lack goes through `input: { … }`.
-- Errors are `SumeError` subclasses. `error.message` ends with a `Fix:` line; `error.fieldErrors` lists refused fields.
+- Server-side only. The key is `SUME_API_KEY`; a person makes it at https://open.sume.com/api-keys. Never print it.
+- Host: `https://api.open.sume.com`. Never `https://api.sume.com`, which is sume.com's API.
+- The model goes in `input.model`. Images go to `/v1/image-router/generate`; video, lip-sync and captions to `/v1/video-router/generate`.
+- After a `TimeoutError` the job keeps running. Call `subscribe()` again with `error.idempotencyKey`; never submit a new job for it.
+- The README is the reference. Sume's API docs: https://open.sume.com/docs.
 
 ## Working on this repository
 
 ```sh
 npm ci
-npm test            # vitest, against a mock API (test/mock-api.ts); never the real one
-npm run check       # lint + typecheck + test + build + README examples + pack-and-import smoke
+npm test            # jest, against a mock of the Sume API (src/test-utils/mock-api.ts); never the real one
+npm run lint
+npm run build:prod
 ```
 
-- `src/client.ts` holds `Sume`, `Job`, `Result` and `GeneratedFile`. Logic that does no I/O lives in `flow.ts`, `inputs.ts` and `types.ts`. `index.ts` holds the module functions over a shared default client.
-- `src/generated.ts` comes from the live API: run `node scripts/generate.mjs`, never edit it by hand. The weekly `types.yml` workflow fails when it falls behind. `test/typing-check.ts` holds the mistakes the types must catch (`@ts-expect-error`); `npm run typecheck` checks it.
-- `http.ts` owns the key, the `data`/`error` envelope, request ids and retries. It retries only what is safe: reads, and submits that carry an idempotency key. The key goes to the API host only, never to storage or media URLs.
-- Keep zero runtime dependencies. Local imports end in `.js`. Errors always carry a `hint`.
-- A user-visible change gets a CHANGELOG line under **Unreleased** and README updates. Bump the version in `package.json` and `src/version.ts`, then push a `v*` tag; the release workflow builds, checks and publishes.
-- The Python client (`sumelabs/sume-python`) has the same surface; keep the two in step.
+- The repository follows higgsfield-js file for file: `src/config.ts`, `src/auth.ts`, `src/errors.ts`, `src/helpers.ts`, `src/types.ts`, `src/utils/retry.ts`, and the client in `src/v2/`. Keep its names and shape; change calls only where Sume's API differs.
+- Only Sume's documented Open API routes. Retry only what is safe: reads, and submits with their `Idempotency-Key`.
+- The API key goes to the API host only, never to storage URLs, and no error may carry it.
+- A user-visible change updates the README and `RELEASE_NOTES.md`. The version lives in `package.json` and `src/version.ts`; a test keeps them equal.
+- Publishing runs from `.github/workflows/publish.yml` when a GitHub release is created, and needs `NPM_TOKEN`. Do not tag, release or publish unless Chase asks for that release.

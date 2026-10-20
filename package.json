@@ -1,66 +1,80 @@
 {
-  "name": "@sume-com/open",
-  "version": "0.2.0",
-  "description": "Images and video from the Sume Open API: one call to run any open.sume.com model and save the file. Server-side.",
+  "name": "@sume-com/client",
+  "version": "0.3.0",
+  "description": "Official Sume SDK for Node.js and TypeScript",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./v2": {
+      "types": "./dist/v2/index.d.ts",
+      "default": "./dist/v2/index.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "v2": [
+        "./dist/v2/index.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.txt"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "build:prod": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.prod.json",
+    "test": "jest --passWithNoTests",
+    "test:watch": "jest --watch --passWithNoTests",
+    "lint": "eslint src",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "prepare": "npm run build:prod",
+    "prepublishOnly": "npm run build:prod && npm run test"
+  },
   "keywords": [
     "sume",
     "open.sume.com",
-    "image-generation",
-    "video-generation",
-    "lipsync",
-    "generative-media",
     "ai",
-    "sdk"
+    "api",
+    "client",
+    "sdk",
+    "typescript",
+    "image-generation",
+    "video-generation"
   ],
-  "homepage": "https://github.com/sumelabs/sume-js#readme",
-  "bugs": {
-    "url": "https://github.com/sumelabs/sume-js/issues"
-  },
+  "author": "Sume Labs",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sumelabs/sume-js.git"
   },
-  "license": "MIT",
-  "author": "Sume Labs",
-  "type": "module",
-  "sideEffects": false,
-  "main": "./dist/cjs/index.js",
-  "module": "./dist/esm/index.js",
-  "types": "./dist/esm/index.d.ts",
-  "exports": {
-    ".": {
-      "browser": "./dist/browser.js",
-      "import": {
-        "types": "./dist/esm/index.d.ts",
-        "default": "./dist/esm/index.js"
-      },
-      "require": {
-        "types": "./dist/cjs/index.d.ts",
-        "default": "./dist/cjs/index.js"
-      }
-    },
-    "./package.json": "./package.json"
+  "bugs": {
+    "url": "https://github.com/sumelabs/sume-js/issues"
   },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
+  "homepage": "https://open.sume.com/docs",
   "engines": {
-    "node": ">=20"
+    "node": ">=18.0.0"
   },
-  "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/finish-build.mjs",
-    "check": "npm run lint && npm run typecheck && npm test && npm run build && node scripts/check-readme.mjs && node scripts/smoke-package.mjs",
-    "lint": "biome check .",
-    "lint:fix": "biome check --write .",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+  "dependencies": {
+    "axios": "^1.20.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.15",
-    "@types/node": "22.20.5",
-    "typescript": "5.9.3",
-    "vitest": "5.0.4"
+    "@eslint/js": "^10.0.1",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^20.19.0",
+    "eslint": "^10.13.0",
+    "jest": "^30.5.2",
+    "prettier": "^3.9.10",
+    "ts-jest": "^29.4.15",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.0"
   }
 }

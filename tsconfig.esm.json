@@ -1,6 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": { "outDir": "dist/esm", "rootDir": "src", "module": "NodeNext", "moduleResolution": "NodeNext" },
-  "include": ["src"],
-  "exclude": ["src/browser.ts"]
-}

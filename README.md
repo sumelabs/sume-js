@@ -1,376 +1,542 @@
-# @sume-com/open
+# Sume SDK for Node.js and TypeScript
 
-The official JavaScript and TypeScript client for the [Sume Open API](https://open.sume.com). Run any open.sume.com model for images, video, lip-sync or captions, and save the file. Prices are in dollars. Every model and field is typed, and there are no dependencies. Node 20+ and Bun, server-side only.
+Official SDK for Sume's image and video generation API, the [Sume Open API](https://open.sume.com/docs) at `https://api.open.sume.com`.
 
-```sh
-npm install https://github.com/sumelabs/sume-js/releases/latest/download/sume-open.tgz
-export SUME_API_KEY="sume_live_..."   # from https://open.sume.com/api-keys
+sume-js follows the shape of Higgsfield's JavaScript client, [higgsfield-js](https://github.com/higgsfield-ai/higgsfield-js): the same `config()`, `subscribe()`, `withPolling` and error classes. Only the calls and the host are Sume's. [Coming from Higgsfield](#coming-from-higgsfield) lists every difference.
+
+## Installation
+
+```bash
+npm install @sume-com/client
 ```
 
-```ts
-import { run } from "@sume-com/open";
+> Not on npm yet. Until the first release, install it from GitHub: `npm install github:sumelabs/sume-js`
 
-const image = await run("gpt-image-2", "a red kite over a beach", { quality: "low" });
-await image.save("kite.png");
+---
+
+## Client
+
+The client is exported from `@sume-com/client/v2`, the same path as Higgsfield's v2 client, and from the package root. It features:
+- Single `credentials` field: one Sume API key (`sume_live_...`)
+- `Authorization: Bearer <key>` authentication header
+- `User-Agent: sume-server-js/<version>` header
+- Server-side only (browser usage blocked for security)
+- Simplified API with `subscribe()` method
+- Automatic polling via `/v1/jobs/{id}/status`, then the result from `/v1/jobs/{id}/result`
+- Safe retries: every submit carries an `Idempotency-Key`, so a retried submit never makes a second, billed job
+
+### Quick Start
+
+```typescript
+import { sume, config } from '@sume-com/client/v2';
+
+// Configure credentials
+config({
+  credentials: 'YOUR_SUME_API_KEY'
+});
+
+// Generate content
+const response = await sume.subscribe('/v1/image-router/generate', {
+  input: {
+    model: 'gpt-image-2',
+    prompt: 'A ceramic coffee cup on a wooden table, soft morning light',
+    quality: 'low',
+    aspect_ratio: '1:1'
+  },
+  withPolling: true
+});
+
+if (response.status === 'completed') {
+  console.log('Image URL:', response.images?.[0].url);
+}
 ```
 
-That is the whole program. `run` prices the request and submits it, uploading any local files first. It waits for the job and returns the files; `save` writes them to disk. This one cost $0.0060.
+`gpt-image-2` at `quality: 'low'` costs $0.006 an image. Every model and its dollar price is in the [open model catalog](https://open.sume.com/docs/reference/catalog/list).
 
-[Install](#install) · [Key](#key) · [Run a model](#run-a-model) · [Types](#types) · [Pick a model](#pick-a-model) · [Progress, long jobs and cancel](#progress-long-jobs-and-cancel) · [Files](#files) · [In a web app](#in-a-web-app) · [Webhooks](#webhooks) · [Errors](#errors) · [Configuration](#configuration) · [Coming from fal or Higgsfield](#coming-from-fal-or-higgsfield) · [Reference](#reference)
+### Authentication
 
-## Install
+Make a key at [open.sume.com → API keys](https://open.sume.com/api-keys). A key spends your open.sume.com balance, in US dollars. Keep it on your server.
 
-```sh
-npm install https://github.com/sumelabs/sume-js/releases/latest/download/sume-open.tgz
+**Option 1: Single credentials field (recommended)**
+```typescript
+import { config } from '@sume-com/client/v2';
+
+config({
+  credentials: 'YOUR_SUME_API_KEY'
+});
 ```
 
-The package is not on npm yet. Once it is, the install line will be `npm install @sume-com/open`. It ships ESM and CommonJS builds with TypeScript types (TypeScript 5.0 or newer; no `@types/node` needed).
+**Option 2: `apiKey` field**
+```typescript
+config({
+  apiKey: 'YOUR_SUME_API_KEY'
+});
+```
 
-**Server-side only.** A Sume key spends money, and anything in a page can be read by whoever opens it. If a browser bundle imports the package, the bundle gets a stub that throws and tells you to move the call to your backend. Run it in an API route, a server action or a worker, then send the result to the browser.
-
-## Key
-
-A person makes the key at [open.sume.com → API keys](https://open.sume.com/api-keys). The client reads it from `SUME_API_KEY`, or from a `SUME_API_KEY=` line in `./.env`:
-
-```sh
+**Option 3: Environment variable**
+```bash
 export SUME_API_KEY="sume_live_..."
 ```
 
-Nothing else needs setting up. The client calls `https://api.open.sume.com` unless you tell it otherwise (see [Configuration](#configuration)).
+```typescript
+// No config needed - automatically reads SUME_API_KEY from the environment
+import { sume } from '@sume-com/client/v2';
+```
 
-## Run a model
+### Creating a Client Instance
 
-```ts
-import { run } from "@sume-com/open";
+```typescript
+import { createSumeClient } from '@sume-com/client/v2';
 
-// Text to image
-const image = await run("gpt-image-2", "a ceramic cup on a wooden table, morning light", { quality: "low" });
-console.log(image.url, image.usd); // https://media.sume.com/…/….png 0.0060
-
-// Edit an image: local files are uploaded first
-const night = await run("gpt-image-2", "the same cup at night, candlelight", { image: "cup.png" });
-
-// Image to video, with a budget
-const video = await run("grok-imagine-video-1.5", "slow push in, steam rising", {
-  image: "cup.png",
-  duration: 4,
-  resolution: "480p",
-  maxUsd: 0.5,
-});
-await video.save("cup.mp4");
-
-// Lip-sync a clip to speech
-const talk = await run("veed-lipsync", { video: "talk.mp4", audio: "line.wav", duration: 6 });
-
-// Burn captions into a clip
-const captioned = await run("veed-subtitles", {
-  video: "clip.mp4",
-  duration: 12,
-  captions: { style: "glass", position: "bottom" },
+const client = createSumeClient({
+  credentials: 'YOUR_SUME_API_KEY'
 });
 ```
 
-- **Inputs** use the API's own field names: `quality`, `duration`, `resolution`, `aspect_ratio`, `num_images`, `output_format`, `captions`, and so on. Your editor completes them for the model you named (see [Types](#types)).
-- **Media** has short names: `image`, `video`, `audio`, `end_image`, `reference_images` and `mask`. Each value can be an https URL, a file path, bytes (a `Uint8Array` or `Buffer`) or a `Blob`. Anything that is not a URL is uploaded first.
-- **`maxUsd`** refuses to submit a request that costs more. It throws `OverBudgetError` before anything is uploaded or charged.
-- **`timeoutMs`** is how long `run` waits in all: 30 minutes by default. When it passes, the job keeps running; see [Progress, long jobs and cancel](#progress-long-jobs-and-cancel).
-- **`signal`** is an `AbortSignal` that stops the uploads, the submit and the wait.
-- **Retries never pay twice.** Every submit carries an idempotency key, and the client's retries reuse it. To retry a submit yourself, pass `idempotencyKey`.
-- **A busy account waits.** When the account already runs as many jobs as it may, `run` and `submit` wait for a free slot and submit then, instead of failing: `run` within its `timeoutMs`, `submit` up to 10 minutes. `slotWaitMs: 0` on `submit` throws `RateLimitError` at once instead.
+Explicit client instances keep their credentials separate. `client.configure()` updates only that instance; module-level `config()` updates the shared `sume` client.
 
-`run` resolves to a `Result`:
+### API Methods
 
-| | |
-|---|---|
-| `result.url`, `result.urls` | The file URLs |
-| `result.files` | `GeneratedFile` objects with `url`, `type`, `contentType`, `width`, `height`, `durationMs`, plus `save()` and `bytes()` |
-| `await result.save(path?)` | Downloads every file and returns the absolute paths. A file name: the first file takes it and the rest are numbered. A directory (ending in `/`): the files go inside it. No path: `<model>-<job>.<ext>` in the working directory, never overwriting a file |
-| `result.usd` | The price in dollars, as a string like `"0.0060"` |
-| `result.job` | The job: `input`, `createdAt`, `completedAt`, and `seconds` (how long it ran) |
-| `JSON.stringify(result)` | A summary for a page: `jobId`, `model`, `usd`, `url`, `files`, `seconds` |
-| `result.jobId`, `result.model` | Which job made it |
+#### `subscribe(endpoint, options)`
 
-A video's poster frame is left out of `files`; `allFiles` has every file the job made.
+Submit a job and wait for its result:
 
-## Types
-
-Each model this version knows has its own input type, generated from the live API, with the API's descriptions on hover. The model id picks it, so the editor completes the fields that model takes (a field the catalog says it refuses is left out, and lip-sync and captions require `duration`), and the values it lists (`resolution: "480p" | "720p"` for `seedance-2-mini`). A mistake fails the type check before it costs anything:
-
-```ts
-await run("gpt-image-2", "a red kite", { qualty: "low" });
-```
-
-```text
-error TS2561: Object literal may only specify known properties, but 'qualty' does not exist in type 'RunInput<"gpt-image-2">'. Did you mean to write 'quality'?
-```
-
-- `ModelId` lists every model this version knows; `ImageModelId` and `VideoModelId` split them by kind. A model added to the catalog later still works: `run` takes any id, and gives it the general `Input` type. A typo in a model id is caught when the call runs, with a suggestion (`Did you mean gpt-image-2?`), not by tsc.
-- `InputOf<"seedance-2-mini">` is that model's fields, and so is the named type `Seedance2MiniInput`. `ImageInput` and `VideoInput` cover every model of a kind.
-- Fields with a fixed set of values in the API, like `captions.position` or `background`, are checked. Where the catalog lists a model's own values (`resolution`, `aspect_ratio`, `quality`, `output_format`), those are offered, and any other string is still accepted: the API takes some values that the catalog does not list.
-- A field newer than this version goes through `input`: `run("gpt-image-2", "a kite", { input: { new_field: 1 } })`.
-- What comes back is typed too: `Result`, `Job`, `Status`, `JobEvent`, `Model`, `Price` and `JobInfo`. Each of them except `Job` keeps the API's own JSON in `raw`.
-
-`node scripts/generate.mjs` rewrites the types from the API, and a weekly check fails when the API moves on.
-
-## Pick a model
-
-Prices differ by more than 100× between models, so name the model yourself. Listing and pricing are free, and need no key:
-
-```ts
-import { estimate, model, models } from "@sume-com/open";
-
-for (const m of await models("video")) console.log(m.id, m.price, m.seconds); // seedance-2-mini $0.02936–$0.06352/s [4, 15]
-await model("seedance-2-mini"); // inputs, resolutions, limits, price
-String(await estimate("seedance-2-mini", "a paper boat", { duration: 8, resolution: "720p" })); // "$0.5082"
-```
-
-## Progress, long jobs and cancel
-
-`run` takes callbacks for progress:
-
-```ts
-const video = await run("seedance-2-mini", "a paper boat on a pond", {
-  duration: 5,
-  resolution: "480p",
-  onSubmit: (job) => console.log("submitted", job.id), // keep the id: it is all you need later
-  onStatus: (status) => console.log(String(status)), // queued (#2 in line), processing, completed
-  onEvent: (event) => console.log(event.type), // job.created, job.started, job.completed
-});
-```
-
-Video can take minutes. Submit now and collect later:
-
-```ts
-import { listJobs, result, submit } from "@sume-com/open";
-
-const job = await submit("kling-3", "a red kite over a beach", { duration: 5 });
-console.log(job.id);
-
-await job.status(); // one read: queued, processing, completed, failed or canceled
-for await (const status of job.poll()) console.log(String(status)); // every read until the job ends
-const clip = await job.wait(); // the Result, or JobFailedError
-
-// Later, anywhere, with only the id:
-await result("job_7513b52d-3669-4ffe-b317-8b02000715eb");
-await job.events(); // the job's life: job.created, job.started, job.completed…
-await listJobs({ limit: 10 }); // newest first
-```
-
-A job that has not started generating can be canceled, and it is refunded:
-
-```ts
-import { cancel, run } from "@sume-com/open";
-
-await cancel(job.id); // true when canceled; false when it had already started or ended
-
-// Or give up on a wait, and cancel the job if it is still queued:
-await run("kling-3", "a red kite", { duration: 5, timeoutMs: 120_000, cancelOnTimeout: true });
-```
-
-`wait`, `poll` and `run` read the status as often as the API asks, but never wait longer than 5 s between reads in the first minute, 10 s after that, and 15 s after ten minutes. Network errors and errors on Sume's side do not end the wait. When `timeoutMs` passes, `WaitTimeoutError` names the job, and the job keeps running (unless you passed `cancelOnTimeout` and it had not started). Do not submit again: a second submit is a second charge.
-
-## Files
-
-Pass a local file wherever a URL goes, and it is uploaded first: as a short name (`image: "cup.png"`), in a media field (`image_urls: ["a.png", "b.png"]`), or nested, as in `frame_images` or `input_references`:
-
-```ts
-import { readFile } from "node:fs/promises";
-
-await run("seedance-2", "the two of them walk into the sea", {
-  duration: 5,
-  input_references: [{ type: "image_url", image_url: { url: await readFile("her.png") } }],
-});
-```
-
-A file can be a path, a `file:` URL, bytes (a `Uint8Array`, `Buffer` or `ArrayBuffer`) or a `Blob`. A plain string counts as a path only where a media URL belongs, so a prompt or `metadata` is never mistaken for a file. To get a URL first, for reuse:
-
-```ts
-import { upload } from "@sume-com/open";
-
-const url = await upload("photo.png");
-const fromBytes = await upload(pngBytes, { contentType: "image/png" });
-```
-
-Downloads stream to a `.part` file and are renamed when complete, so an interrupted download never leaves half a file behind. The API key is sent to the API only, never to the storage or media hosts.
-
-## In a web app
-
-A `Result` turns into JSON by itself, so a handler can return it. In a Next.js route handler:
-
-```ts
-// app/api/images/route.ts
-import { run } from "@sume-com/open";
-
-export async function POST(request: Request) {
-  const { prompt } = await request.json();
-  const image = await run("gpt-image-2", prompt, { quality: "low", maxUsd: 0.05, signal: request.signal });
-  return Response.json(image); // { jobId, model, usd: "0.0060", url, files: […], seconds: 14.2 }
-}
-```
-
-Video takes minutes: hand back the job id, and let the page poll:
-
-```ts
-// app/api/videos/route.ts
-import { submit } from "@sume-com/open";
-
-export async function POST(request: Request) {
-  const { prompt } = await request.json();
-  // A busy account waits for a slot; slotWaitMs bounds that, so the request never hangs.
-  const job = await submit("seedance-2-mini", prompt, {
+```typescript
+const response = await sume.subscribe('/v1/video-router/generate', {
+  input: {
+    model: 'seedance-2.5',
+    prompt: 'Steam rises from the cup as the camera slowly pushes in',
     duration: 5,
-    resolution: "480p",
-    maxUsd: 0.5,
-    slotWaitMs: 20_000,
-    signal: request.signal,
-  });
-  return Response.json({ jobId: job.id });
-}
-
-// app/api/videos/[id]/route.ts
-import { result, status } from "@sume-com/open";
-
-export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const now = await status(id);
-  return Response.json(now.ok ? await result(id) : { state: now.state });
-}
-```
-
-From a server action, return `image.toJSON()`: a server action can send plain objects only. With Express:
-
-```ts
-app.post("/images", async (req, res) => {
-  res.json(await run("gpt-image-2", req.body.prompt, { quality: "low", maxUsd: 0.05 }));
+    resolution: '480p',
+    aspect_ratio: '16:9'
+  },
+  withPolling: true,   // Automatically poll for job completion (default: true)
+  webhook: {           // Optional webhook
+    url: 'https://your-webhook-url.com/callback'
+  }
 });
 ```
 
-## Webhooks
+**Parameters:**
+- `endpoint` (string): The API endpoint: `'/v1/image-router/generate'` for images, `'/v1/video-router/generate'` for video, lip-sync and captions
+- `options.input` (object): The request body: `model` and that model's fields (`prompt`, `aspect_ratio`, `duration`, `image_url` and so on)
+- `options.withPolling` (boolean, default: `true`): Automatically poll for job completion
+- `options.webhook` (object, optional): Webhook configuration
+  - `url` (string): Public HTTPS URL that Sume calls when the job ends
+- `options.idempotencyKey` (string, optional): Your own `Idempotency-Key` (1 to 255 printable ASCII characters). Without it, the SDK makes a UUID for each call
 
-Pass `webhook_url` with your inputs, and Sume POSTs the finished job there when it ends. Each delivery is signed, and `verifyWebhook` checks the signature:
+**Note:** When a webhook is provided, the SDK sends `mode: "webhook"` and `webhook_url` in the request body.
 
-```ts
-import { verifyWebhook } from "@sume-com/open";
+The model goes in the input, not in the endpoint. Each model's fields and accepted values are in its catalog row: [image models](https://open.sume.com/docs/reference/images/list-models), [video models](https://open.sume.com/docs/reference/video/list-models).
 
-export async function POST(request: Request) {
-  const body = await request.text(); // the raw body, exactly as received
-  if (!verifyWebhook(body, request.headers, signingSecret)) return new Response("bad signature", { status: 401 });
-  const delivery = JSON.parse(body);
-  // …
-  return new Response("ok");
+#### `upload(data, contentType)`
+
+Upload a file that is not online yet, and get an HTTPS URL to pass to a model:
+
+```typescript
+import { readFile } from 'node:fs/promises';
+
+const audioUrl = await sume.upload(await readFile('speech.wav'), 'audio/wav');
+```
+
+The SDK asks `POST /v1/files/generate-upload-url` for a place to put the file, `PUT`s the bytes there without your API key, and returns the file's `public_url`. Uploading is free.
+
+#### `uploadImage(imageBuffer, format?)`
+
+`upload()` for an image: `format` is `'jpeg'` (default), `'png'` or `'webp'`.
+
+```typescript
+const imageUrl = await sume.uploadImage(await readFile('photo.png'), 'png');
+```
+
+### Examples
+
+#### Text-to-Image Generation
+
+```typescript
+import { sume, config } from '@sume-com/client/v2';
+
+config({
+  credentials: 'YOUR_SUME_API_KEY'
+});
+
+const response = await sume.subscribe('/v1/image-router/generate', {
+  input: {
+    model: 'nano-banana-pro',
+    prompt: 'A majestic mountain landscape at sunset',
+    aspect_ratio: '16:9'
+  },
+  withPolling: true
+});
+
+if (response.status === 'completed') {
+  console.log('Image URL:', response.images?.[0].url);
 }
 ```
 
-The scheme is `sume-v1`: an HMAC-SHA256 over `{x-sume-webhook-timestamp}.{raw body}`, sent in `x-sume-webhook-signature`. Deliveries older than 10 minutes are refused (`toleranceSeconds`). While a secret rotates, either the old or the new secret passes. `headers` may be a `Headers` object or a plain object, as from Express or Node.
+#### Image Editing
 
-An open.sume.com key cannot read the signing secret through the API yet (`GET /v1/webhooks/signing-secret` answers `open_key_route_not_allowed`). Until it can, collect results with `job.wait()` or `result(jobId)` instead.
-
-## Errors
-
-Every error is a `SumeError`. Its `message` says what went wrong, then what to do in a `Fix:` line. This one is real output, for an aspect ratio that gpt-image-2 does not take:
-
-```text
-InvalidRequestError: Invalid request body, parameters, or headers. (request req_1e9a5dc2…)
-  - aspect_ratio: must be equal to one of the allowed values
-Fix: gpt-image-2 takes aspect_ratio auto, 1:1, 16:9, 9:16, 4:3, 3:4, 5:4, 9:8, 4:5. See all its fields with model("gpt-image-2").
+```typescript
+const response = await sume.subscribe('/v1/image-router/generate', {
+  input: {
+    model: 'gpt-image-2',
+    prompt: 'Make the cup cobalt blue, keep everything else the same',
+    quality: 'low',
+    image_urls: ['https://example.com/cup.png']
+  }
+});
 ```
 
-When the API refuses fields, each one is in `error.fieldErrors`, to show next to a form:
+#### Image-to-Video Generation
 
-```ts
-import { InvalidRequestError, run } from "@sume-com/open";
+```typescript
+import { readFile } from 'node:fs/promises';
+
+const imageUrl = await sume.uploadImage(await readFile('cup.png'), 'png');
+
+const response = await sume.subscribe('/v1/video-router/generate', {
+  input: {
+    model: 'seedance-2.5',
+    prompt: 'Cinematic camera movement around the cup',
+    image_url: imageUrl,
+    duration: 5,
+    resolution: '480p'
+  },
+  withPolling: true
+});
+
+if (response.status === 'completed') {
+  console.log('Video URL:', response.video?.url);
+}
+```
+
+#### Lip-sync
+
+```typescript
+const response = await sume.subscribe('/v1/video-router/generate', {
+  input: {
+    model: 'veed-fabric-1.0',
+    image_url: await sume.uploadImage(await readFile('face.jpg')),
+    audio_url: await sume.upload(await readFile('speech.wav'), 'audio/wav'),
+    duration: 8,
+    resolution: '480p'
+  }
+});
+```
+
+### Polling & Status Lifecycle
+
+The client automatically polls `/v1/jobs/{id}/status` when `withPolling` is `true`. It waits as long as the API asks (`next_poll_after_seconds`, 2 seconds while a job runs) and never less than `pollInterval`. It keeps polling through `5xx`, `429` and dropped connections. When the job completes, it reads `/v1/jobs/{id}/result`.
+
+**Status Values:**
+- `queued` – Request accepted and waiting for a worker
+- `in_progress` – Generation currently running
+- `completed` – Generation finished and media URLs are returned
+- `failed` – Generation errored; the price is refunded and `error` says why
+- `canceled` – Canceled before generation started; the price is refunded
+
+**API Response Format:**
+
+The status call answers with Sume's job status:
+
+```json
+{
+  "data": {
+    "request_id": "job_7513b52d-3669-4ffe-b317-8b02000715eb",
+    "job_id": "job_7513b52d-3669-4ffe-b317-8b02000715eb",
+    "status": "COMPLETED",
+    "sume_status": "completed",
+    "status_url": "https://api.open.sume.com/v1/jobs/job_7513b52d-3669-4ffe-b317-8b02000715eb/status",
+    "result_url": "https://api.open.sume.com/v1/jobs/job_7513b52d-3669-4ffe-b317-8b02000715eb/result",
+    "cancel_url": null,
+    "next_action": "fetch_result",
+    "terminal": true
+  }
+}
+```
+
+The SDK turns it, and the result's artifacts, into one `V2Response`:
+
+```json
+{
+  "status": "completed",
+  "request_id": "job_7513b52d-3669-4ffe-b317-8b02000715eb",
+  "status_url": "https://api.open.sume.com/v1/jobs/job_7513b52d-3669-4ffe-b317-8b02000715eb/status",
+  "cancel_url": null,
+  "result_url": "https://api.open.sume.com/v1/jobs/job_7513b52d-3669-4ffe-b317-8b02000715eb/result",
+  "images": [{ "url": "https://media.sume.com/artifacts/artf_.../images.png" }],
+  "artifacts": [
+    {
+      "id": "artf_...",
+      "type": "image",
+      "url": "https://media.sume.com/artifacts/artf_.../images.png",
+      "content_type": "image/png"
+    }
+  ]
+}
+```
+
+`images` holds every image artifact and `video` the first video artifact, as in the Higgsfield client. `artifacts` keeps every artifact as Sume returns it, audio included. A failed job resolves with `status: 'failed'` and `error` (`code`, `message`), not an exception. Artifacts live on `media.sume.com` and are readable by anyone with the link; copy them to your own storage if you need to control access.
+
+### Working with the Response
+
+```typescript
+const response = await sume.subscribe('/v1/image-router/generate', {
+  input: { model: 'gpt-image-2', prompt: 'Test', quality: 'low', num_images: 2 },
+  withPolling: true
+});
+
+// Check status
+console.log('Request ID:', response.request_id);
+console.log('Status:', response.status);
+
+// Access results
+for (const image of response.images ?? []) {
+  console.log('Result URL:', image.url);
+}
+if (response.status === 'failed') {
+  console.error(response.error?.code, response.error?.message);
+}
+```
+
+### Long Jobs and Resuming
+
+`maxPollTime` (5 minutes by default) bounds the wait. When it runs out, `subscribe()` throws `TimeoutError`, and **the job keeps running**. Do not submit a new job: call `subscribe()` again with the same input and the error's `idempotencyKey`. Sume returns the same job, charges it once, and the SDK keeps waiting.
+
+```typescript
+import { TimeoutError } from '@sume-com/client/v2';
+
+const input = { model: 'seedance-2.5', prompt: 'A paper boat drifting down a rain gutter', duration: 10 };
 
 try {
-  await run("gpt-image-2", "a kite", { quality: "low", aspect_ratio: "7:3" });
+  await sume.subscribe('/v1/video-router/generate', { input });
 } catch (error) {
-  if (!(error instanceof InvalidRequestError)) throw error;
-  for (const field of error.fieldErrors) console.log(field.path, field.message); // aspect_ratio must be equal to one of the allowed values
+  if (error instanceof TimeoutError) {
+    const response = await sume.subscribe('/v1/video-router/generate', {
+      input,
+      idempotencyKey: error.idempotencyKey
+    });
+    console.log(response.video?.url);
+  }
 }
 ```
 
-| Error | When |
-|---|---|
-| `AuthenticationError` | There is no key, the key is wrong or revoked, or it was made for another host |
-| `InsufficientFundsError` | The balance is below the price. Nothing was charged |
-| `OverBudgetError` | The price is over `maxUsd`. Nothing was submitted |
-| `InvalidRequestError` | A field is missing, wrong, or not taken by this model (`fieldErrors` says which). `NotFoundError` covers an unknown model or job; for a model it suggests the closest id |
-| `RateLimitError` | Too many requests, or a slot did not free up within the wait |
-| `JobFailedError` | The job failed or was canceled. It is refunded; `jobId` and the reason are on the error |
-| `WaitTimeoutError` | `timeoutMs` passed. The job is still running; `result(error.jobId)` picks it up. With `cancelOnTimeout` it was canceled and refunded instead (`code` is `wait_timeout_canceled`) |
-| `APIError`, `APIConnectionError` | A problem on Sume's side, or the network. `retryable` says whether trying again can help |
+The same works across processes: pass your own `idempotencyKey`, store it, and submit with `withPolling: false`. Later, the same call with `withPolling: true` waits for that job.
 
-Each error also has `code`, `hint`, `status`, `requestId`, `jobId` and `details`. Quote `requestId` to support. When a submit's outcome is unknown (the network dropped, or Sume answered 5xx), the error names the idempotency key in `idempotencyKey` and in the `Fix:` line: pass it back to get that job instead of paying twice.
+### Webhooks
 
-## Configuration
-
-```ts
-import { Sume } from "@sume-com/open";
-
-const sume = new Sume({
-  apiKey: process.env.MY_SUME_KEY, // default: SUME_API_KEY, then ./.env
-  baseUrl: "https://api.open.sume.com", // default: SUME_API_BASE_URL, then this
-  timeoutMs: 60_000, // per HTTP request
-  maxRetries: 3, // for reads, and for submits (which carry an idempotency key)
-  headers: { "X-Trace-Id": "…" }, // sent to the API only, never to storage or media hosts
-  fetch: globalThis.fetch, // your own fetch, for proxies or tests
+```typescript
+await sume.subscribe('/v1/video-router/generate', {
+  input: { model: 'kling-3', prompt: 'A slow dolly shot through a neon market at night', duration: 5 },
+  webhook: { url: 'https://example.com/hooks/sume' },
+  withPolling: false
 });
-await sume.run("gpt-image-2", "a kite");
 ```
 
-To see each API call, run with `NODE_DEBUG=sume`:
+Sume POSTs `job.completed`, `job.failed` or `job.canceled` to the URL once the job ends, and retries for about three hours until it gets a `2xx`. Every delivery is signed with your workspace's signing secret (dashboard → **Webhooks**). Check it with `verifyWebhook` on the raw body before you trust the event:
 
-```text
-$ NODE_DEBUG=sume node app.mjs
-SUME 4183: POST /v1/image-router/generate -> 202 (request req_9c1…, attempt 1, 412 ms)
+```typescript
+import { verifyWebhook, WebhookEvent } from '@sume-com/client';
+
+export async function POST(request: Request) {
+  const body = await request.text();
+  const valid = verifyWebhook(
+    body,
+    request.headers.get('x-sume-webhook-timestamp') ?? undefined,
+    request.headers.get('x-sume-webhook-signature') ?? undefined,
+    process.env.SUME_WEBHOOK_SECRET!
+  );
+  if (!valid) {
+    return new Response('invalid signature', { status: 401 });
+  }
+  const event = JSON.parse(body) as WebhookEvent;
+  console.log(event.event, event.job_id, event.payload?.artifacts[0]?.url);
+  return new Response('ok');
+}
 ```
 
-| Host | What it is |
+`verifyWebhook` accepts any `sume-v1=` signature in the header (there is one per live secret during a rotation) and refuses deliveries more than five minutes old. A delivery can arrive more than once: dedupe on `job_id`.
+
+### Configuration
+
+```typescript
+import { createSumeClient } from '@sume-com/client/v2';
+
+const client = createSumeClient({
+  credentials: 'YOUR_SUME_API_KEY',
+
+  // Optional configuration
+  baseURL: 'https://api.open.sume.com', // Default
+  timeout: 120000, // 2 minutes default
+  maxRetries: 3,
+  retryBackoff: 1000,
+  retryMaxBackoff: 60000,
+  pollInterval: 2000, // Check every 2 seconds at most
+  maxPollTime: 300000, // Timeout after 5 minutes
+  headers: {
+    'X-Custom-Header': 'value'
+  }
+});
+```
+
+Retries cover network errors, `429` and `5xx`, with exponential backoff and jitter, and follow `retry-after`. A `4xx` is never retried. Raise `maxPollTime` for long video, which can take several minutes.
+
+### TypeScript Support
+
+```typescript
+import {
+  createSumeClient,
+  SumeClient,
+  V2Response
+} from '@sume-com/client/v2';
+
+const client: SumeClient = createSumeClient({
+  credentials: 'YOUR_SUME_API_KEY'
+});
+
+const response: V2Response = await client.subscribe('/v1/image-router/generate', {
+  input: {
+    model: 'gpt-image-2',
+    prompt: 'Test',
+    aspect_ratio: '1:1'
+  }
+});
+```
+
+The two endpoints type their input (`ImageGenerateInput`, `VideoGenerateInput`): `model` is required, the documented fields are checked, and model-specific fields pass through.
+
+---
+
+## Error Handling
+
+The SDK provides comprehensive error handling with specific error types:
+
+```typescript
+import {
+  AuthenticationError,
+  BadInputError,
+  ValidationError,
+  NotEnoughCreditsError,
+  APIError,
+  TimeoutError,
+  BrowserNotSupportedError
+} from '@sume-com/client';
+
+try {
+  const response = await sume.subscribe('/v1/image-router/generate', {
+    input: { model: 'gpt-image-2', prompt: 'Test' }
+  });
+} catch (error) {
+  if (error instanceof AuthenticationError) {
+    console.error('❌ Authentication failed - check your API key');
+  } else if (error instanceof NotEnoughCreditsError) {
+    console.error('💳 Insufficient funds - add funds at open.sume.com/billing');
+  } else if (error instanceof BadInputError) {
+    console.error('📋 Invalid input parameters:', error.message, error.details);
+  } else if (error instanceof ValidationError) {
+    console.error('⚠️  Validation error:', error.message);
+  } else if (error instanceof TimeoutError) {
+    console.error('⏱️  Still running, resume with idempotencyKey', error.idempotencyKey);
+  } else if (error instanceof APIError) {
+    console.error('🌐 API Error:', error.statusCode, error.code, error.requestId, error.message);
+  } else if (error instanceof BrowserNotSupportedError) {
+    console.error('🚫 Browser usage not supported - use Node.js environment');
+  } else {
+    console.error('💥 Unexpected error:', error);
+  }
+}
+```
+
+| Class | When | Sume `code` |
+|---|---|---|
+| `AuthenticationError` | `401` | `unauthorized` |
+| `NotEnoughCreditsError` | `402` | `insufficient_funds`; `responseData.error.details` has `required_usd` and `available_usd` |
+| `BadInputError` | `400` | `invalid_request` (`details` lists each field and why), `concurrency_limit_reached`, `bad_request` |
+| `ValidationError` | `422` | |
+| `APIError` | any other status | `open_key_route_not_allowed` (`403`), `not_found` (`404`), `idempotency_conflict` (`409`), `rate_limited` (`429`), `database_busy` (`503`), `internal_error` (`500`) |
+| `TimeoutError` | `maxPollTime` ran out; the job keeps running | |
+| `CredentialsMissedError` | no key in config or `SUME_API_KEY` | |
+| `BrowserNotSupportedError` | the SDK was loaded in a browser | |
+
+Every API error carries `statusCode`, Sume's stable `code`, the `requestId` to quote to support, and the full body in `responseData`. A network error is an `APIError` with no `statusCode` and the system `code` (`ECONNRESET`, `ENOTFOUND`, ...). Errors never carry your API key or a signed upload URL. All of them extend `SumeError`.
+
+A workspace may have only so many jobs queued or running at once (2 to 40, by the funds added in the past 28 days). A submit past the cap is refused with `BadInputError` and `code: 'concurrency_limit_reached'`, and is not charged. Wait for a job to end, then submit the next.
+
+### Job Status Handling
+
+```typescript
+switch (response.status) {
+  case 'completed':
+    console.log('Success:', response.images?.[0]?.url ?? response.video?.url);
+    break;
+  case 'failed':
+    console.error('Generation failed:', response.error?.message);
+    break;
+  case 'canceled':
+    console.warn('Job was canceled');
+    break;
+}
+```
+
+---
+
+## Best Practices
+
+1. **Name the model yourself**: prices differ by more than 100× between models. The [catalog](https://open.sume.com/docs/reference/catalog/list) lists every model's dollar price, and [Estimate a price](https://open.sume.com/docs/reference/catalog/estimate) prices a request for free.
+
+2. **Upload large files**: a local image, clip or audio file goes up once with `upload()` / `uploadImage()`, and its URL works in any input field:
+   ```typescript
+   const imageUrl = await sume.uploadImage(localImageBuffer, 'jpeg');
+   ```
+
+3. **Handle rate limits**: configure exponential backoff for retries:
+   ```typescript
+   const client = createSumeClient({
+     credentials: 'YOUR_SUME_API_KEY',
+     maxRetries: 5,
+     retryBackoff: 2000,
+     retryMaxBackoff: 30000
+   });
+   ```
+
+4. **Use webhooks for long operations**: for video, a webhook saves the polling. Keep a slow poll as a fallback in case a delivery is lost.
+
+5. **Never resubmit a running job**: after a `TimeoutError` or a crash, call `subscribe()` again with the same `idempotencyKey`. A new key is a new, billed job.
+
+6. **Environment variables**: store your key in the environment:
+   ```bash
+   export SUME_API_KEY="sume_live_..."
+   ```
+
+---
+
+## Coming from Higgsfield
+
+| higgsfield-js | sume-js |
 |---|---|
-| `https://api.open.sume.com` (default) | Open's production API. Keys come from open.sume.com |
-| `https://api.sume.com` | **Not Open.** This is sume.com's own API, and Open keys do not work there |
+| `npm install @higgsfield/client` | `npm install @sume-com/client` |
+| `import { higgsfield, config } from '@higgsfield/client/v2'` | `import { sume, config } from '@sume-com/client/v2'` |
+| `createHiggsfieldClient()`, `HiggsfieldClient`, `HiggsfieldError` | `createSumeClient()`, `SumeClient`, `SumeError` |
+| `config({ credentials: 'KEY_ID:KEY_SECRET' })` | `config({ credentials: 'sume_live_...' })` |
+| `HF_CREDENTIALS`, `HF_KEY`, `HF_API_KEY` + `HF_API_SECRET` | `SUME_API_KEY` |
+| `Authorization: Key KEY_ID:KEY_SECRET` | `Authorization: Bearer sume_live_...` |
+| `https://api.higgsfield.ai` | `https://api.open.sume.com` |
+| `subscribe('flux-pro/kontext/max/text-to-image', { input })` | `subscribe('/v1/image-router/generate', { input: { model: 'flux-kontext-max', ... } })` |
+| polls `/requests/{request_id}/status` | polls `/v1/jobs/{id}/status`, then reads `/v1/jobs/{id}/result` |
+| `webhook: { url, secret }` becomes `?hf_webhook=<url>` | `webhook: { url }` becomes `mode: "webhook"` and `webhook_url`; check deliveries with `verifyWebhook()` |
+| statuses `queued`, `in_progress`, `completed`, `failed`, `nsfw` | `queued`, `in_progress`, `completed`, `failed`, `canceled` |
+| `NotEnoughCreditsError` on `403` | `NotEnoughCreditsError` on `402` |
+| retried submits have no idempotency key | every submit sends `Idempotency-Key`; retries and `TimeoutError` resume the same job |
+| `uploadImage()` on the deprecated v1 client | `upload()` and `uploadImage()` on the client |
+| `client.agents` (Agent API) | not in sume-js: the Open API has no agent sessions |
+| v1 `HiggsfieldClient` with `generate()` | not ported: Sume has one API, the one above |
 
-A key works only on the host it was made for. On another host it is refused as if it were wrong, and the error says so.
+---
 
-## Coming from fal or Higgsfield
+## Support
 
-| | `@fal-ai/client` | `@higgsfield/client` (v2) | `@sume-com/open` |
-|---|---|---|---|
-| Run and wait | `fal.subscribe("fal-ai/flux/dev", { input: { prompt } })` | `higgsfield.subscribe("flux-pro/kontext/max/text-to-image", { input: { prompt } })` | `run("flux-2-pro", prompt)` |
-| Get the file | `result.data.images[0].url`, then download it yourself | `jobSet.jobs[0].results?.raw.url`, then download it yourself | `await result.save("out.png")` |
-| Local file in | A `Blob` in the input, or `fal.storage.upload(blob)` | Upload it yourself, then pass the URL | A path, bytes or a `Blob`: `{ image: "photo.png" }` |
-| Queue | `fal.queue.submit`, `.status`, `.result`, `.cancel` | `withPolling: false`, then poll yourself | `submit`, then `job.status()`, `job.wait()`, `job.cancel()` |
-| Progress | `onQueueUpdate`, `logs: true` | None | `onStatus`, `onEvent`, `onSubmit` |
-| Price | Not in the client | Not in the client | `estimate(…)` and `maxUsd` |
-| Types | Generated per endpoint | `input` is `any` | Generated per model, from the live API |
-| Key in a browser | Works; a server proxy is advised | Refused | Refused: the browser build throws |
-| Errors | `ApiError`, `ValidationError` | `HiggsfieldError` and subclasses | One class per case, each with a `Fix:` line |
-
-## Reference
-
-The module functions use a shared default client; `new Sume(options)` has the same methods.
-
-| Call | Resolves to |
-|---|---|
-| `run(model, prompt?, { …fields, maxUsd, timeoutMs, idempotencyKey, onSubmit, onStatus, onEvent, cancelOnTimeout, signal, input })` | `Result` |
-| `submit(model, prompt?, { …fields, maxUsd, idempotencyKey, slotWaitMs, signal, input })` | `Job` |
-| `estimate(model, prompt?, { …fields, input })` | `Price` (`usd`, `usdMicros`, `String()` → `"$0.0060"`) |
-| `models(kind?)`, `model(id)` | `Model[]`, `Model` (`id`, `name`, `kind`, `price`, `priceFrom`, `per`, `resolutions`, `seconds`, `inputs`) |
-| `upload(file, { contentType?, signal? })` | the file's URL |
-| `job(id)` | `Job`, without a call (not a promise) |
-| `status(id)` | `Status` (`state`, `done`, `ok`, `queuePosition`) |
-| `result(id, { timeoutMs, onStatus, onEvent, cancelOnTimeout, signal })` | `Result`, waiting if the job is still running |
-| `cancel(id)` | `true` when canceled, `false` when too late |
-| `listJobs({ limit?, status? })` | `JobInfo[]` |
-| `verifyWebhook(body, headers, secret, { toleranceSeconds? })` | `boolean` (not a promise) |
-| `job.status()`, `job.poll(options)`, `job.wait(options)`, `job.cancel()`, `job.events()`, `job.info()` | `Status`, an async iterator of `Status`, `Result`, `boolean`, `JobEvent[]`, `JobInfo` |
-| `result.save(path?)`, `file.save(path?)`, `file.bytes()`, `result.toJSON()` | paths, a path, a `Uint8Array`, a plain object |
-
-## Also
-
-- [`sume`](https://github.com/sumelabs/sume-python), the Python client.
-- [`opensume`](https://github.com/sumelabs/opensume-cli), the command-line tool for the same API.
-- [`@sume-com/sdk`](https://www.npmjs.com/package/@sume-com/sdk) is a different package, for sume.com's own API (Formats and Agents).
-- API docs: https://open.sume.com/docs
+- Documentation: https://open.sume.com/docs
+- API Status: https://status.sume.com
 
 ## License
 

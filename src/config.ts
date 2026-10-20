@@ -1,93 +1,79 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { AuthenticationError, DEFAULT_BASE_URL, KEYS_URL, SumeError } from "./errors.js";
-
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
-
-/**
- * `https://api.open.sume.com/v1/` → `https://api.open.sume.com`. Plain http is
- * accepted for a local server only: anywhere else it would send the key across
- * the network in the clear.
- */
-export function normalizeBaseUrl(raw: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw.trim());
-  } catch {
-    throw new SumeError(`baseUrl is not a URL: "${raw}".`, {
-      hint: `Use the full address, like ${DEFAULT_BASE_URL}.`,
-      code: "invalid_base_url",
-    });
-  }
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && LOCAL_HOSTS.has(url.hostname))) {
-    throw new SumeError(`baseUrl must use https: "${raw}".`, {
-      hint: "Plain http is accepted only for localhost.",
-      code: "invalid_base_url",
-    });
-  }
-  return `${url.origin}${url.pathname.replace(/\/+$/u, "").replace(/\/v1$/u, "")}`;
+export interface ClientConfig {
+  timeout?: number;
+  maxRetries?: number;
+  retryBackoff?: number;
+  retryMaxBackoff?: number;
+  pollInterval?: number;
+  maxPollTime?: number;
+  headers?: Record<string, string>;
+  baseURL?: string;
 }
 
-/**
- * `SUME_API_KEY` from a `.env` file in `directory`. Only that one line is read:
- * the API host never comes from a project file, so a cloned repository cannot
- * send your key elsewhere.
- */
-export function dotEnvKey(directory: string = process.cwd()): string | undefined {
-  let text: string;
-  try {
-    text = readFileSync(join(directory, ".env"), "utf8");
-  } catch {
-    return undefined;
+export const DEFAULT_BASE_URL = 'https://api.open.sume.com';
+
+const CONFIG_KEYS = [
+  'timeout',
+  'maxRetries',
+  'retryBackoff',
+  'retryMaxBackoff',
+  'pollInterval',
+  'maxPollTime',
+  'headers',
+  'baseURL',
+] as const;
+
+export class Config implements ClientConfig {
+  timeout: number = 120000;
+  maxRetries: number = 3;
+  retryBackoff: number = 1000;
+  retryMaxBackoff: number = 60000;
+  pollInterval: number = 2000;
+  maxPollTime: number = 300000;
+  headers: Record<string, string> = {};
+  baseURL: string = DEFAULT_BASE_URL;
+
+  constructor(config?: Partial<ClientConfig>) {
+    if (config) {
+      for (const key of CONFIG_KEYS) {
+        if (config[key] !== undefined) {
+          Object.assign(this, { [key]: config[key] });
+        }
+      }
+      this.headers = { ...this.headers };
+    }
+    this.validate();
   }
-  for (const line of text.split(/\r?\n/u)) {
-    const match = /^\s*(?:export\s+)?SUME_API_KEY\s*=\s*(.*?)\s*$/u.exec(line);
-    if (!match) continue;
-    let value = match[1] ?? "";
-    const quote = value[0];
-    if ((quote === '"' || quote === "'") && value.length >= 2 && value.endsWith(quote)) value = value.slice(1, -1);
-    else value = value.replace(/\s+#.*$/u, "");
-    return value.trim() || undefined;
-  }
-  return undefined;
-}
 
-/** A key goes into an HTTP header: refuse anything a key never contains, without quoting it. */
-export function checkKey(raw: string): string {
-  const key = raw.trim();
-  if (!/^[\x21-\x7e]+$/u.test(key)) {
-    throw new AuthenticationError("The API key contains spaces, line breaks or other characters a key never has.", {
-      hint: `Copy the key again from ${KEYS_URL}.`,
-      code: "invalid_api_key",
-    });
-  }
-  return key;
-}
-
-/** `apiKey` first, then `SUME_API_KEY`, then `SUME_API_KEY` in `./.env`. */
-export function resolveApiKey(explicit: string | undefined): string | undefined {
-  if (explicit?.trim()) return checkKey(explicit);
-  const fromEnv = process.env.SUME_API_KEY;
-  if (fromEnv?.trim()) return checkKey(fromEnv);
-  const fromFile = dotEnvKey();
-  return fromFile ? checkKey(fromFile) : undefined;
-}
-
-/** `baseUrl` first, then `SUME_API_BASE_URL`, then Open's production API. */
-export function resolveBaseUrl(explicit: string | undefined): string {
-  return normalizeBaseUrl(explicit || process.env.SUME_API_BASE_URL || DEFAULT_BASE_URL);
-}
-
-/** Keys spend money: refuse to run where a page's visitors could read them. */
-export function assertServer(): void {
-  const scope = globalThis as { window?: unknown; document?: unknown };
-  if (typeof scope.window !== "undefined" && typeof scope.document !== "undefined") {
-    throw new SumeError(
-      "@sume-com/open runs on servers only: a key in a browser can be read by anyone who opens the page.",
-      {
-        hint: "Call it from your backend (an API route, a server action, a worker) and send the result to the browser.",
-        code: "browser_not_supported",
-      },
-    );
+  private validate(): void {
+    if (!(this.timeout > 0)) {
+      throw new Error('timeout must be positive');
+    }
+    if (!(this.maxRetries >= 0)) {
+      throw new Error('maxRetries must be non-negative');
+    }
+    if (this.maxRetries > 5) {
+      throw new Error('maxRetries cannot be greater than 5');
+    }
+    if (!(this.retryBackoff >= 0)) {
+      throw new Error('retryBackoff must be non-negative');
+    }
+    if (!(this.retryMaxBackoff >= 0)) {
+      throw new Error('retryMaxBackoff must be non-negative');
+    }
+    if (!(this.pollInterval > 0)) {
+      throw new Error('pollInterval must be positive');
+    }
+    if (!(this.maxPollTime > 0)) {
+      throw new Error('maxPollTime must be positive');
+    }
+    let url: URL;
+    try {
+      url = new URL(this.baseURL);
+    } catch {
+      throw new Error('baseURL must be an absolute URL');
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      throw new Error('baseURL must be an http(s) URL');
+    }
   }
 }
